@@ -1,0 +1,4 @@
+# file: C:\Users\MrVamsiKasireddy\Desktop\Tasks\Pre-Appointment_Agent\services\llm_client.py
+# hypothesis_version: 6.151.9
+
+[0.7, 1000, 'content', 'friendly', 'gpt-3.5-turbo', 'role', 'system', 'user']

@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block title %}{{ page_content.brand.name }} - Home{% endblock %}
+
+{% block content %}
+<!-- Hero Section -->
+<section class="hero">
+    <div class="container">
+        <div class="hero-content">
+            <h1 class="hero-headline">{{ page_content.hero.headline }}</h1>
+            <p class="hero-subheadline">{{ page_content.hero.subheadline }}</p>
+            <a href="{{ page_content.hero.cta_href }}" class="btn btn-primary btn-lg">
+                {{ page_content.hero.cta_text }}
+            </a>
+        </div>
+    </div>
+</section>
+
+<!-- Metrics Section -->
+<section class="metrics">
+    <div class="container">
+        <div class="metrics-grid">
+            {% for metric in page_content.metrics %}
+            <div class="metric-card">
+                <div class="metric-value">{{ metric.value }}</div>
+                <div class="metric-label">{{ metric.label }}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+<!-- Features Section -->
+<section class="features">
+    <div class="container">
+        <h2 class="section-title">Key Features</h2>
+        <div class="features-grid">
+            {% for feature in page_content.features %}
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <!-- Icon placeholder - using emoji for simplicity -->
+                    {% if feature.icon == 'shield-check' %}🛡️
+                    {% elif feature.icon == 'sparkles' %}✨
+                    {% elif feature.icon == 'database' %}💾
+                    {% elif feature.icon == 'refresh' %}🔄
+                    {% elif feature.icon == 'palette' %}🎨
+                    {% elif feature.icon == 'clock' %}🕐
+                    {% else %}📋
+                    {% endif %}
+                </div>
+                <h3 class="feature-title">{{ feature.title }}</h3>
+                <p class="feature-description">{{ feature.description }}</p>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+<!-- CTA Section -->
+<section class="cta-section">
+    <div class="container">
+        <div class="cta-content">
+            <h2 class="cta-title">Ready to Get Started?</h2>
+            <p class="cta-text">Generate your first appointment prep message in seconds.</p>
+            <a href="/dashboard" class="btn btn-primary btn-lg">Go to Dashboard</a>
+        </div>
+    </div>
+</section>
+{% endblock %}

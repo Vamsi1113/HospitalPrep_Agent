@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ page_content.brand.name }}{% endblock %}</title>
+    
+    <!-- Design Tokens CSS Variables -->
+    <style>
+        :root {
+            /* Colors */
+            --color-primary: {{ design_tokens.colors.primary }};
+            --color-primary-dark: {{ design_tokens.colors.primary_dark }};
+            --color-primary-light: {{ design_tokens.colors.primary_light }};
+            --color-secondary: {{ design_tokens.colors.secondary }};
+            --color-secondary-dark: {{ design_tokens.colors.secondary_dark }};
+            --color-secondary-light: {{ design_tokens.colors.secondary_light }};
+            --color-accent: {{ design_tokens.colors.accent }};
+            --color-accent-dark: {{ design_tokens.colors.accent_dark }};
+            --color-accent-light: {{ design_tokens.colors.accent_light }};
+            --color-neutral-50: {{ design_tokens.colors.neutral_50 }};
+            --color-neutral-100: {{ design_tokens.colors.neutral_100 }};
+            --color-neutral-200: {{ design_tokens.colors.neutral_200 }};
+            --color-neutral-300: {{ design_tokens.colors.neutral_300 }};
+            --color-neutral-400: {{ design_tokens.colors.neutral_400 }};
+            --color-neutral-500: {{ design_tokens.colors.neutral_500 }};
+            --color-neutral-600: {{ design_tokens.colors.neutral_600 }};
+            --color-neutral-700: {{ design_tokens.colors.neutral_700 }};
+            --color-neutral-800: {{ design_tokens.colors.neutral_800 }};
+            --color-neutral-900: {{ design_tokens.colors.neutral_900 }};
+            --color-success: {{ design_tokens.colors.success }};
+            --color-warning: {{ design_tokens.colors.warning }};
+            --color-error: {{ design_tokens.colors.error }};
+            --color-info: {{ design_tokens.colors.info }};
+            --color-white: {{ design_tokens.colors.white }};
+            --color-black: {{ design_tokens.colors.black }};
+            
+            /* Typography */
+            --font-family-primary: {{ design_tokens.typography.font_family_primary }};
+            --font-family-secondary: {{ design_tokens.typography.font_family_secondary }};
+            --font-family-mono: {{ design_tokens.typography.font_family_mono }};
+            --font-size-xs: {{ design_tokens.typography.font_size_xs }};
+            --font-size-sm: {{ design_tokens.typography.font_size_sm }};
+            --font-size-base: {{ design_tokens.typography.font_size_base }};
+            --font-size-lg: {{ design_tokens.typography.font_size_lg }};
+            --font-size-xl: {{ design_tokens.typography.font_size_xl }};
+            --font-size-2xl: {{ design_tokens.typography.font_size_2xl }};
+            --font-size-3xl: {{ design_tokens.typography.font_size_3xl }};
+            --font-size-4xl: {{ design_tokens.typography.font_size_4xl }};
+            --font-size-5xl: {{ design_tokens.typography.font_size_5xl }};
+            --font-weight-light: {{ design_tokens.typography.font_weight_light }};
+            --font-weight-normal: {{ design_tokens.typography.font_weight_normal }};
+            --font-weight-medium: {{ design_tokens.typography.font_weight_medium }};
+            --font-weight-semibold: {{ design_tokens.typography.font_weight_semibold }};
+            --font-weight-bold: {{ design_tokens.typography.font_weight_bold }};
+            --line-height-tight: {{ design_tokens.typography.line_height_tight }};
+            --line-height-normal: {{ design_tokens.typography.line_height_normal }};
+            --line-height-relaxed: {{ design_tokens.typography.line_height_relaxed }};
+            --line-height-loose: {{ design_tokens.typography.line_height_loose }};
+            
+            /* Spacing */
+            --spacing-xs: {{ design_tokens.spacing.xs }};
+            --spacing-sm: {{ design_tokens.spacing.sm }};
+            --spacing-md: {{ design_tokens.spacing.md }};
+            --spacing-lg: {{ design_tokens.spacing.lg }};
+            --spacing-xl: {{ design_tokens.spacing.xl }};
+            --spacing-2xl: {{ design_tokens.spacing['2xl'] }};
+            --spacing-3xl: {{ design_tokens.spacing['3xl'] }};
+            --spacing-4xl: {{ design_tokens.spacing['4xl'] }};
+            --spacing-5xl: {{ design_tokens.spacing['5xl'] }};
+            
+            /* Effects */
+            --shadow-sm: {{ design_tokens.effects.shadow_sm }};
+            --shadow-md: {{ design_tokens.effects.shadow_md }};
+            --shadow-lg: {{ design_tokens.effects.shadow_lg }};
+            --shadow-xl: {{ design_tokens.effects.shadow_xl }};
+            --shadow-2xl: {{ design_tokens.effects.shadow_2xl }};
+            --border-radius-sm: {{ design_tokens.effects.border_radius_sm }};
+            --border-radius-md: {{ design_tokens.effects.border_radius_md }};
+            --border-radius-lg: {{ design_tokens.effects.border_radius_lg }};
+            --border-radius-xl: {{ design_tokens.effects.border_radius_xl }};
+            --border-radius-2xl: {{ design_tokens.effects.border_radius_2xl }};
+            --border-radius-full: {{ design_tokens.effects.border_radius_full }};
+            --transition-fast: {{ design_tokens.effects.transition_fast }};
+            --transition-base: {{ design_tokens.effects.transition_base }};
+            --transition-slow: {{ design_tokens.effects.transition_slow }};
+            --transition-slower: {{ design_tokens.effects.transition_slower }};
+        }
+    </style>
+    
+    <!-- Link to external CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="container">
+            <div class="navbar-brand">
+                <a href="/" class="brand-link">
+                    <span class="brand-name">{{ page_content.brand.name }}</span>
+                </a>
+            </div>
+            <div class="navbar-menu">
+                {% for nav_item in page_content.navigation %}
+                <a href="{{ nav_item.href }}" class="nav-link">{{ nav_item.label }}</a>
+                {% endfor %}
+            </div>
+        </div>
+    </nav>
+    
+    <!-- Main Content -->
+    <main class="main-content">
+        {% block content %}{% endblock %}
+    </main>
+    
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <p class="footer-text">
+                &copy; 2024 {{ page_content.brand.name }}. {{ page_content.brand.tagline }}
+            </p>
+        </div>
+    </footer>
+    
+    <!-- Link to external JavaScript -->
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

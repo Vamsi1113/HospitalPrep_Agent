@@ -1,0 +1,4 @@
+# file: C:\Users\MrVamsiKasireddy\Desktop\Tasks\Pre-Appointment_Agent\agent\orchestrator.py
+# hypothesis_version: 6.151.9
+
+['appointment_type', 'category', 'error', 'fasting_hours', 'fasting_required', 'full_message', 'items_to_bring', 'llm_used', 'message_id', 'messages', 'preview', 'procedure', 'rules_explanation', 'special_warnings', 'storage_warning']

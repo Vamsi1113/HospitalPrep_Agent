@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Appointment Prep AI Agent</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/agent_workspace.css') }}">
+</head>
+<body>
+    <div class="agent-workspace">
+        <!-- Header -->
+        <header class="workspace-header">
+            <div class="header-content">
+                <h1 class="agent-title">🤖 Appointment Prep AI Agent</h1>
+                <p class="agent-subtitle">Intelligent Pre-Consultation Preparation Assistant</p>
+            </div>
+        </header>
+
+        <!-- Main Workspace -->
+        <div class="workspace-container">
+            <!-- Left Panel: Input Form -->
+            <aside class="input-panel">
+                <div class="panel-header">
+                    <h2>📋 Appointment Details</h2>
+                </div>
+                
+                <form id="agent-form" class="agent-form">
+                    <!-- Patient Name -->
+                    <div class="form-group">
+                        <label for="patient_name">Patient Name</label>
+                        <input type="text" id="patient_name" name="patient_name" required maxlength="100" placeholder="John Smith">
+                    </div>
+
+                    <!-- Appointment Type -->
+                    <div class="form-group">
+                        <label for="appointment_type">Appointment Type</label>
+                        <select id="appointment_type" name="appointment_type" required>
+                            <option value="">Select type...</option>
+                            <option value="Surgery">Surgery</option>
+                            <option value="Consultation">Consultation</option>
+                            <option value="Imaging">Imaging</option>
+                            <option value="Lab Work">Lab Work</option>
+                            <option value="Procedure">Procedure</option>
+                        </select>
+                    </div>
+
+                    <!-- Procedure -->
+                    <div class="form-group">
+                        <label for="procedure">Procedure</label>
+                        <input type="text" id="procedure" name="procedure" required maxlength="200" placeholder="Colonoscopy">
+                    </div>
+
+                    <!-- Clinician -->
+                    <div class="form-group">
+                        <label for="clinician_name">Clinician Name</label>
+                        <input type="text" id="clinician_name" name="clinician_name" required maxlength="100" placeholder="Dr. Sarah Johnson">
+                    </div>
+
+                    <!-- Date & Time -->
+                    <div class="form-group">
+                        <label for="appointment_datetime">Appointment Date & Time</label>
+                        <input type="datetime-local" id="appointment_datetime" name="appointment_datetime" required>
+                    </div>
+
+                    <!-- Channel -->
+                    <div class="form-group">
+                        <label for="channel_preference">Delivery Channel</label>
+                        <select id="channel_preference" name="channel_preference" required>
+                            <option value="">Select channel...</option>
+                            <option value="email">Email</option>
+                            <option value="sms">SMS</option>
+                            <option value="print">Print</option>
+                        </select>
+                    </div>
+
+                    <!-- Special Notes -->
+                    <div class="form-group">
+                        <label for="special_notes">Special Notes (Optional)</label>
+                        <textarea id="special_notes" name="special_notes" rows="3" placeholder="Any special considerations..."></textarea>
+                    </div>
+
+                    <!-- Submit Button -->
+                    <button type="submit" class="btn-primary" id="generate-btn">
+                        <span id="btn-text">🚀 Generate Prep Plan</span>
+                        <span id="btn-spinner" class="spinner" style="display: none;"></span>
+                    </button>
+
+                    <!-- Sample Data -->
+                    <div class="sample-section">
+                        <p class="sample-label">Quick Test:</p>
+                        <div class="sample-buttons">
+                            <button type="button" class="btn-sample" data-sample-id="0">Surgery</button>
+                            <button type="button" class="btn-sample" data-sample-id="1">Imaging</button>
+                            <button type="button" class="btn-sample" data-sample-id="2">Lab Work</button>
+                        </div>
+                    </div>
+                </form>
+            </aside>
+
+            <!-- Center Panel: Agent Response -->
+            <main class="response-panel">
+                <!-- Welcome State -->
+                <div id="welcome-state" class="welcome-state">
+                    <div class="welcome-icon">🏥</div>
+                    <h2>Welcome to Your AI Prep Assistant</h2>
+                    <p>Fill in the appointment details on the left, and I'll generate a comprehensive preparation plan with:</p>
+                    <ul class="welcome-features">
+                        <li>✓ Fasting instructions</li>
+                        <li>✓ Diet guidance</li>
+                        <li>✓ Medication reminders</li>
+                        <li>✓ What to bring checklist</li>
+                        <li>✓ Arrival instructions</li>
+                        <li>✓ Red flag warnings</li>
+                    </ul>
+                </div>
+
+                <!-- Error State -->
+                <div id="error-state" class="error-state" style="display: none;">
+                    <div class="error-icon">⚠️</div>
+                    <h3>Validation Issues</h3>
+                    <div id="error-messages" class="error-messages"></div>
+                </div>
+
+                <!-- Success State -->
+                <div id="success-state" class="success-state" style="display: none;">
+                    <!-- Summary -->
+                    <div class="prep-section summary-section">
+                        <h2>📋 Appointment Summary</h2>
+                        <div id="appointment-summary" class="section-content"></div>
+                    </div>
+
+                    <!-- Fasting Plan -->
+                    <div class="prep-section" id="fasting-section" style="display: none;">
+                        <h2>🍽️ Fasting Instructions</h2>
+                        <div id="fasting-plan" class="section-content"></div>
+                    </div>
+
+                    <!-- Diet Guidance -->
+                    <div class="prep-section" id="diet-section" style="display: none;">
+                        <h2>🥗 Diet Guidance</h2>
+                        <div id="diet-guidance" class="section-content"></div>
+                    </div>
+
+                    <!-- Medication Instructions -->
+                    <div class="prep-section">
+                        <h2>💊 Medication Instructions</h2>
+                        <div id="medication-instructions" class="section-content"></div>
+                    </div>
+
+                    <!-- Items to Bring -->
+                    <div class="prep-section">
+                        <h2>🎒 What to Bring</h2>
+                        <div id="items-to-bring" class="section-content"></div>
+                    </div>
+
+                    <!-- Arrival Instructions -->
+                    <div class="prep-section">
+                        <h2>🚗 Arrival Instructions</h2>
+                        <div id="arrival-instructions" class="section-content"></div>
+                    </div>
+
+                    <!-- Transport Instructions -->
+                    <div class="prep-section" id="transport-section" style="display: none;">
+                        <h2>🚕 Transportation Requirements</h2>
+                        <div id="transport-instructions" class="section-content"></div>
+                    </div>
+
+                    <!-- Red Flag Warnings -->
+                    <div class="prep-section warning-section">
+                        <h2>🚨 When to Call the Clinic</h2>
+                        <div id="red-flag-warnings" class="section-content"></div>
+                    </div>
+
+                    <!-- Closing Note -->
+                    <div class="prep-section closing-section">
+                        <div id="closing-note" class="section-content"></div>
+                    </div>
+
+                    <!-- Actions -->
+                    <div class="action-buttons">
+                        <button id="copy-btn" class="btn-secondary">📋 Copy All</button>
+                        <button id="print-btn" class="btn-secondary">🖨️ Print</button>
+                    </div>
+                </div>
+            </main>
+
+            <!-- Right Panel: Reasoning Trace & History -->
+            <aside class="trace-panel">
+                <!-- Reasoning Trace -->
+                <div class="trace-section">
+                    <div class="panel-header">
+                        <h2>🧠 Agent Reasoning</h2>
+                    </div>
+                    <div id="reasoning-trace" class="trace-content">
+                        <p class="trace-empty">Agent reasoning will appear here...</p>
+                    </div>
+                </div>
+
+                <!-- History -->
+                <div class="history-section">
+                    <div class="panel-header">
+                        <h2>📚 Recent Plans</h2>
+                    </div>
+                    <div id="history-list" class="history-content">
+                        <p class="history-empty">No history yet</p>
+                    </div>
+                </div>
+            </aside>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/agent_workspace.js') }}"></script>
+</body>
+</html>

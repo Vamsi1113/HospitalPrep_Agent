@@ -1,0 +1,75 @@
+# ============================================================================
+# Appointment Prep AI Agent - Python Dependencies
+# ============================================================================
+#
+# Install all dependencies with: pip install -r requirements.txt
+#
+# These versions have been tested and verified to work together.
+#
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Core Web Framework (Required)
+# ----------------------------------------------------------------------------
+Flask>=3.0.0                    # Web framework for HTTP server and routing
+Werkzeug>=3.0.0                 # WSGI utilities (included with Flask)
+Jinja2>=3.1.0                   # Template engine (included with Flask)
+MarkupSafe>=2.1.0               # Safe string handling (included with Jinja2)
+click>=8.1.0                    # CLI utilities (included with Flask)
+itsdangerous>=2.1.0             # Secure signing (included with Flask)
+
+# ----------------------------------------------------------------------------
+# Configuration Management (Required)
+# ----------------------------------------------------------------------------
+python-dotenv>=1.0.0            # Load environment variables from .env file
+                                # Required for loading OPENAI_API_KEY and other settings
+
+# ----------------------------------------------------------------------------
+# AI/LLM Integration (Optional)
+# ----------------------------------------------------------------------------
+openai>=1.6.0                   # OpenAI API client for message enhancement
+                                # Note: Application works without API key
+
+# ----------------------------------------------------------------------------
+# LangGraph Agent Framework (Required)
+# ----------------------------------------------------------------------------
+langgraph>=0.0.20               # LangGraph for agent orchestration
+langchain>=0.1.0                # LangChain core framework
+langchain-core>=0.1.0           # LangChain core components
+langchain-openai>=0.0.5         # LangChain OpenAI integration
+
+# ----------------------------------------------------------------------------
+# Testing Framework (Required for Development)
+# ----------------------------------------------------------------------------
+pytest>=7.4.0                   # Test framework and runner
+pytest-mock>=3.12.0             # Mocking utilities for tests
+hypothesis>=6.92.0              # Property-based testing library
+                                # Required for running property-based tests
+
+# ----------------------------------------------------------------------------
+# Development Tools (Optional)
+# ----------------------------------------------------------------------------
+# Uncomment these for development:
+# black>=23.12.0                # Code formatter
+# flake8>=7.0.0                 # Linting and style checking
+# pytest-cov>=4.1.0             # Test coverage reporting
+# pip-audit>=2.6.0              # Security vulnerability scanning
+
+# ----------------------------------------------------------------------------
+# Database (Built-in)
+# ----------------------------------------------------------------------------
+# SQLite is included with Python standard library (no additional package needed)
+# Database file location: data/appointments.db (auto-created on first run)
+
+# ----------------------------------------------------------------------------
+# Notes
+# ----------------------------------------------------------------------------
+# - Version constraints use >= to allow compatible updates
+# - The application has been tested with:
+#   - Flask 3.0.0 - 3.1.2
+#   - openai 1.6.1 - 2.24.0
+#   - pytest 7.4.3 - 8.4.2
+#   - hypothesis 6.92.1 - 6.151.9
+# - Run 'pip list --outdated' to check for updates
+# - Use 'pip install --upgrade <package>' to update individual packages
+# - Test thoroughly after updating dependencies

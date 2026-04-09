@@ -1,0 +1,4 @@
+# file: C:\Users\MrVamsiKasireddy\Desktop\Tasks\Pre-Appointment_Agent\services\message_builder.py
+# hypothesis_version: 6.151.9
+
+[197, 200, '%B %d, %Y', '%I:%M %p', '...', 'Appointment Category', 'Arrival Time', 'Fasting Required', 'Items to Bring', 'Special Instructions', 'appointment_datetime', 'friendly', 'reason', 'rule']

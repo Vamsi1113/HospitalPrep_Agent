@@ -1,0 +1,4 @@
+# file: C:\Users\MrVamsiKasireddy\Desktop\Tasks\Pre-Appointment_Agent\services\validation.py
+# hypothesis_version: 6.151.9
+
+[100, 200, 'Consultation', 'Imaging', 'Lab Work', 'Procedure', 'Surgery', 'appointment_datetime', 'appointment_type', 'channel_preference', 'clinician_name', 'email', 'patient_name', 'print', 'procedure', 'sms']

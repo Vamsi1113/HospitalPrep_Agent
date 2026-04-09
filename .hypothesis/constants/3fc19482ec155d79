@@ -1,0 +1,4 @@
+# file: C:\Users\MrVamsiKasireddy\Desktop\Tasks\Pre-Appointment_Agent\services\rules_engine.py
+# hypothesis_version: 6.151.9
+
+['Insurance Card', 'Photo ID', 'blood', 'colonoscopy', 'consultation', 'contrast', 'ct', 'endoscopy', 'fasting', 'imaging', 'lab', 'lab work', 'mri', 'procedure', 'surgery', 'ultrasound', 'x-ray']

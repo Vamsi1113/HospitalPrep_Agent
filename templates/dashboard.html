@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+
+{% block title %}{{ page_content.brand.name }} - Dashboard{% endblock %}
+
+{% block content %}
+<section class="dashboard">
+    <div class="container">
+        <h1 class="page-title">Appointment Prep Dashboard</h1>
+        <p class="page-subtitle">Generate personalized appointment preparation instructions</p>
+        
+        <!-- Error Alert (hidden by default) -->
+        <div id="error-alert" class="alert alert-error" style="display: none;">
+            <div class="alert-content">
+                <span class="alert-icon">⚠️</span>
+                <div id="error-messages"></div>
+            </div>
+        </div>
+        
+        <!-- Success Alert (hidden by default) -->
+        <div id="success-alert" class="alert alert-success" style="display: none;">
+            <div class="alert-content">
+                <span class="alert-icon">✅</span>
+                <div id="success-message"></div>
+            </div>
+        </div>
+        
+        <div class="dashboard-grid">
+            <!-- Left Column: Form -->
+            <div class="form-section">
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Appointment Details</h2>
+                    </div>
+                    <div class="card-body">
+                        <form id="appointment-form">
+                            <!-- Patient Name -->
+                            <div class="form-group">
+                                <label for="patient_name" class="form-label">Patient Name</label>
+                                <input 
+                                    type="text" 
+                                    id="patient_name" 
+                                    name="patient_name" 
+                                    class="form-input" 
+                                    required 
+                                    maxlength="100"
+                                    placeholder="John Smith"
+                                >
+                            </div>
+                            
+                            <!-- Appointment Type -->
+                            <div class="form-group">
+                                <label for="appointment_type" class="form-label">Appointment Type</label>
+                                <select id="appointment_type" name="appointment_type" class="form-select" required>
+                                    <option value="">Select type...</option>
+                                    <option value="Surgery">Surgery</option>
+                                    <option value="Consultation">Consultation</option>
+                                    <option value="Imaging">Imaging</option>
+                                    <option value="Lab Work">Lab Work</option>
+                                    <option value="Procedure">Procedure</option>
+                                </select>
+                            </div>
+                            
+                            <!-- Procedure -->
+                            <div class="form-group">
+                                <label for="procedure" class="form-label">Procedure</label>
+                                <input 
+                                    type="text" 
+                                    id="procedure" 
+                                    name="procedure" 
+                                    class="form-input" 
+                                    required 
+                                    maxlength="200"
+                                    placeholder="Colonoscopy"
+                                >
+                            </div>
+                            
+                            <!-- Clinician Name -->
+                            <div class="form-group">
+                                <label for="clinician_name" class="form-label">Clinician Name</label>
+                                <input 
+                                    type="text" 
+                                    id="clinician_name" 
+                                    name="clinician_name" 
+                                    class="form-input" 
+                                    required 
+                                    maxlength="100"
+                                    placeholder="Dr. Sarah Johnson"
+                                >
+                            </div>
+                            
+                            <!-- Appointment Date & Time -->
+                            <div class="form-group">
+                                <label for="appointment_datetime" class="form-label">Appointment Date & Time</label>
+                                <input 
+                                    type="datetime-local" 
+                                    id="appointment_datetime" 
+                                    name="appointment_datetime" 
+                                    class="form-input" 
+                                    required
+                                >
+                            </div>
+                            
+                            <!-- Channel Preference -->
+                            <div class="form-group">
+                                <label for="channel_preference" class="form-label">Delivery Channel</label>
+                                <select id="channel_preference" name="channel_preference" class="form-select" required>
+                                    <option value="">Select channel...</option>
+                                    <option value="email">Email</option>
+                                    <option value="sms">SMS</option>
+                                    <option value="print">Print</option>
+                                </select>
+                            </div>
+                            
+                            <!-- Special Notes (Optional) -->
+                            <div class="form-group">
+                                <label for="special_notes" class="form-label">Special Notes (Optional)</label>
+                                <textarea 
+                                    id="special_notes" 
+                                    name="special_notes" 
+                                    class="form-textarea" 
+                                    rows="3"
+                                    placeholder="Any special considerations or notes..."
+                                ></textarea>
+                            </div>
+                            
+                            <!-- Submit Button -->
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn-primary btn-block" id="generate-btn">
+                                    <span id="btn-text">Generate Instructions</span>
+                                    <span id="btn-spinner" class="spinner" style="display: none;"></span>
+                                </button>
+                            </div>
+                        </form>
+                        
+                        <!-- Sample Data Buttons -->
+                        <div class="sample-data-section">
+                            <p class="sample-data-label">Or try a sample:</p>
+                            <div class="sample-buttons">
+                                <button class="btn btn-secondary btn-sm" data-sample-id="0">Surgery</button>
+                                <button class="btn btn-secondary btn-sm" data-sample-id="1">Imaging</button>
+                                <button class="btn btn-secondary btn-sm" data-sample-id="2">Lab Work</button>
+                                <button class="btn btn-secondary btn-sm" data-sample-id="3">Consultation</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Right Column: Results -->
+            <div class="results-section">
+                <!-- Preview Card -->
+                <div id="preview-card" class="card" style="display: none;">
+                    <div class="card-header">
+                        <h2 class="card-title">Preview</h2>
+                    </div>
+                    <div class="card-body">
+                        <p id="preview-text" class="preview-text"></p>
+                    </div>
+                </div>
+                
+                <!-- Full Message Card -->
+                <div id="message-card" class="card" style="display: none;">
+                    <div class="card-header">
+                        <h2 class="card-title">Generated Message</h2>
+                        <button id="copy-btn" class="btn btn-secondary btn-sm">Copy</button>
+                    </div>
+                    <div class="card-body">
+                        <div id="full-message" class="message-content"></div>
+                        <div class="message-meta">
+                            <span id="llm-badge" class="badge"></span>
+                            <span id="message-id" class="message-id-text"></span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Rules Explanation Card -->
+                <div id="rules-card" class="card" style="display: none;">
+                    <div class="card-header">
+                        <h2 class="card-title">Applied Rules</h2>
+                    </div>
+                    <div class="card-body">
+                        <div id="rules-list" class="rules-list"></div>
+                    </div>
+                </div>
+                
+                <!-- Agent Reasoning Trace Card -->
+                <div id="agent-trace-card" class="card" style="display: none;">
+                    <div class="card-header">
+                        <h2 class="card-title">🤖 Agent Reasoning Trace</h2>
+                    </div>
+                    <div class="card-body">
+                        <div id="agent-trace-list" class="agent-trace-list"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}
