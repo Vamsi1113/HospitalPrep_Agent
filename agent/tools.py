@@ -1002,3 +1002,412 @@ def _build_patient_message_draft(state: AgentState) -> str:
     parts.append("This is a preparation guide, not medical advice.")
     
     return "\n".join(parts)
+
+
+
+# ============================================================================
+# NEW TOOLS FOR FULL PATIENT JOURNEY
+# ============================================================================
+
+def calendar_check_availability_tool(state: AgentState, calendar_service, **kwargs) -> AgentState:
+    """
+    Tool: Check available appointment slots.
+    
+    Args:
+        state: Current agent state
+        calendar_service: CalendarService instance
+    
+    Returns:
+        Updated state with scheduling_data containing available slots
+    """
+    logger.info("Agent Tool: calendar_check_availability_tool")
+    
+    try:
+        raw = state["raw_intake"]
+        appointment_type = raw.get("appointment_type", "Consultation")
+        preferred_date = raw.get("preferred_date", "")
+        duration = raw.get("duration_minutes", 30)
+        
+        slots = calendar_service.get_available_slots(
+            appointment_type=appointment_type,
+            preferred_date=preferred_date,
+            duration_minutes=duration
+        )
+        
+        state["scheduling_data"] = {
+            "available_slots": slots,
+            "selected_slot": None,
+            "booking_confirmed": False,
+            "event_id": None,
+            "confirmation_sent": False
+        }
+        
+        logger.info(f"Found {len(slots)} available slots")
+        
+    except Exception as e:
+        logger.error(f"Calendar check availability error: {e}")
+        state["errors"].append(f"Calendar availability error: {str(e)}")
+    
+    return state
+
+
+def calendar_book_appointment_tool(state: AgentState, calendar_service, 
+                                  sms_service, email_service, **kwargs) -> AgentState:
+    """
+    Tool: Book appointment and send confirmations.
+    
+    Args:
+        state: Current agent state
+        calendar_service: CalendarService instance
+        sms_service: SMSService instance
+        email_service: EmailService instance
+    
+    Returns:
+        Updated state with booking confirmation
+    """
+    logger.info("Agent Tool: calendar_book_appointment_tool")
+    
+    try:
+        scheduling = state.get("scheduling_data")
+        if not scheduling or not scheduling.get("selected_slot"):
+            raise ValueError("No slot selected for booking")
+        
+        raw = state["raw_intake"]
+        slot = scheduling["selected_slot"]
+        
+        # Create calendar event
+        event_id = calendar_service.create_appointment_event(
+            title=f"{raw.get('appointment_type')} - {raw.get('patient_name')}",
+            start_time=slot["start"],
+            end_time=slot["end"],
+            description=f"Procedure: {raw.get('procedure', 'N/A')}",
+            attendee_email=raw.get("email", ""),
+            location=slot.get("location", "Main Clinic")
+        )
+        
+        # Update scheduling data
+        scheduling["booking_confirmed"] = True
+        scheduling["event_id"] = event_id
+        
+        # Send SMS confirmation
+        if raw.get("phone"):
+            sms_service.send_booking_confirmation(
+                to_phone=raw["phone"],
+                appointment_datetime=slot["start_formatted"],
+                doctor=slot.get("doctor", "Doctor TBD"),
+                location=slot.get("location", "Main Clinic")
+            )
+        
+        # Send email confirmation
+        if raw.get("email"):
+            email_service.send_booking_confirmation(
+                to_email=raw["email"],
+                patient_name=raw.get("patient_name", "Patient"),
+                appointment_datetime=slot["start_formatted"],
+                doctor=slot.get("doctor", "Doctor TBD"),
+                location=slot.get("location", "Main Clinic"),
+                prep_summary="Detailed prep instructions will be sent 24 hours before your appointment."
+            )
+        
+        scheduling["confirmation_sent"] = True
+        state["scheduling_data"] = scheduling
+        
+        logger.info(f"Appointment booked: {event_id}")
+        
+    except Exception as e:
+        logger.error(f"Calendar booking error: {e}")
+        state["errors"].append(f"Booking error: {str(e)}")
+    
+    return state
+
+
+def send_sms_reminder_tool(state: AgentState, sms_service, **kwargs) -> AgentState:
+    """
+    Tool: Send SMS reminder with prep instructions.
+    
+    Args:
+        state: Current agent state
+        sms_service: SMSService instance
+    
+    Returns:
+        Updated state
+    """
+    logger.info("Agent Tool: send_sms_reminder_tool")
+    
+    try:
+        raw = state["raw_intake"]
+        phone = raw.get("phone")
+        
+        if not phone:
+            logger.warning("No phone number provided, skipping SMS")
+            return state
+        
+        # Get prep instructions
+        prep_message = state.get("patient_message", "")
+        if not prep_message:
+            logger.warning("No prep message available, skipping SMS")
+            return state
+        
+        # Truncate for SMS (max 1600 chars)
+        prep_brief = prep_message[:1500] + "..." if len(prep_message) > 1500 else prep_message
+        
+        # Send SMS
+        result = sms_service.send_appointment_reminder(
+            to_phone=phone,
+            appointment_datetime=raw.get("appointment_datetime", "TBD"),
+            location="Main Clinic, Floor 2",
+            prep_instructions=prep_brief
+        )
+        
+        logger.info(f"SMS reminder sent: {result.get('message_id')}")
+        
+    except Exception as e:
+        logger.error(f"SMS reminder error: {e}")
+        state["errors"].append(f"SMS error: {str(e)}")
+    
+    return state
+
+
+def send_email_tool(state: AgentState, email_service, **kwargs) -> AgentState:
+    """
+    Tool: Send email with full prep instructions.
+    
+    Args:
+        state: Current agent state
+        email_service: EmailService instance
+    
+    Returns:
+        Updated state
+    """
+    logger.info("Agent Tool: send_email_tool")
+    
+    try:
+        raw = state["raw_intake"]
+        email = raw.get("email")
+        
+        if not email:
+            logger.warning("No email provided, skipping email")
+            return state
+        
+        # Get prep instructions
+        prep_message = state.get("patient_message", "")
+        if not prep_message:
+            logger.warning("No prep message available, skipping email")
+            return state
+        
+        # Send email
+        result = email_service.send_prep_instructions(
+            to_email=email,
+            patient_name=raw.get("patient_name", "Patient"),
+            appointment_datetime=raw.get("appointment_datetime", "TBD"),
+            prep_message=prep_message
+        )
+        
+        logger.info(f"Email sent: {result.get('message_id')}")
+        
+    except Exception as e:
+        logger.error(f"Email send error: {e}")
+        state["errors"].append(f"Email error: {str(e)}")
+    
+    return state
+
+
+def patient_chat_tool(state: AgentState, llm_client, retrieval_service, **kwargs) -> AgentState:
+    """
+    Tool: Handle patient Q&A chat.
+    
+    This tool:
+    1. Takes patient question from state
+    2. Retrieves relevant context (protocols, prep instructions)
+    3. Generates context-aware response
+    4. Updates chat history
+    
+    Args:
+        state: Current agent state (must have patient_question in raw_intake)
+        llm_client: LLM client for response generation
+        retrieval_service: Protocol retrieval service
+    
+    Returns:
+        Updated state with chat_history
+    """
+    logger.info("Agent Tool: patient_chat_tool")
+    
+    try:
+        raw = state["raw_intake"]
+        question = raw.get("patient_question", "")
+        
+        if not question:
+            raise ValueError("No patient question provided")
+        
+        # Initialize chat history if needed
+        if not state.get("chat_history"):
+            state["chat_history"] = []
+        
+        # Add patient question to history
+        state["chat_history"].append({
+            "role": "patient",
+            "content": question,
+            "timestamp": datetime.now().isoformat(),
+            "context_used": None
+        })
+        
+        # Retrieve relevant context
+        context_docs = []
+        if retrieval_service and retrieval_service.is_available():
+            protocols = retrieval_service.retrieve_protocols(
+                appointment_type=raw.get("appointment_type", ""),
+                procedure=raw.get("procedure", ""),
+                max_results=2
+            )
+            context_docs = [p.get("content", "") for p in protocols]
+        
+        # Add prep instructions to context
+        if state.get("patient_message"):
+            context_docs.append(state["patient_message"])
+        
+        # Generate response
+        response = None
+        if llm_client and llm_client.is_available():
+            context_str = "\n\n".join(context_docs) if context_docs else "No specific context available."
+            prompt = f"""You are a helpful medical appointment assistant. Answer the patient's question based on the context provided.
+
+Context:
+{context_str}
+
+Patient Question: {question}
+
+Provide a clear, helpful answer. If the question is outside the scope of appointment preparation, politely redirect to contacting the clinic."""
+            
+            response = llm_client.generate_with_prompt(
+                "You are a medical appointment assistant.",
+                prompt
+            )
+        
+        # Fallback if LLM unavailable or failed
+        if not response:
+            # Provide intelligent fallback based on question keywords
+            question_lower = question.lower()
+            if any(word in question_lower for word in ['eat', 'food', 'drink', 'fasting']):
+                response = "For specific dietary instructions before your appointment, please refer to your preparation instructions or contact the clinic at least 24 hours before your appointment."
+            elif any(word in question_lower for word in ['medication', 'medicine', 'pill', 'drug']):
+                response = "For questions about your medications, please consult with your doctor or pharmacist. Some medications may need to be adjusted before your procedure."
+            elif any(word in question_lower for word in ['time', 'when', 'arrive', 'schedule']):
+                response = "Please arrive 15-30 minutes before your scheduled appointment time. Check your appointment confirmation for specific timing instructions."
+            elif any(word in question_lower for word in ['bring', 'need', 'required', 'documents']):
+                response = "Please bring your ID, insurance card, and any relevant medical records. Check your preparation instructions for procedure-specific requirements."
+            else:
+                response = "I'm here to help with appointment preparation questions. For specific medical advice or detailed questions, please contact your clinic directly."
+        
+        # Add agent response to history
+        state["chat_history"].append({
+            "role": "agent",
+            "content": response,
+            "timestamp": datetime.now().isoformat(),
+            "context_used": context_docs[:2] if context_docs else None
+        })
+        
+        logger.info("Chat response generated")
+        
+    except Exception as e:
+        logger.error(f"Patient chat error: {e}")
+        state["errors"].append(f"Chat error: {str(e)}")
+    
+    return state
+
+
+def post_procedure_tool(state: AgentState, rules_engine, email_service, **kwargs) -> AgentState:
+    """
+    Tool: Generate post-procedure recovery plan.
+    
+    This tool:
+    1. Gets procedure-specific recovery rules
+    2. Generates recovery instructions
+    3. Sends recovery email
+    4. Updates state with post-procedure data
+    
+    Args:
+        state: Current agent state
+        rules_engine: RulesEngine instance
+        email_service: EmailService instance
+    
+    Returns:
+        Updated state with post_procedure_data
+    """
+    logger.info("Agent Tool: post_procedure_tool")
+    
+    try:
+        raw = state["raw_intake"]
+        procedure = raw.get("procedure", "").lower()
+        
+        # Get post-procedure rules
+        recovery_rules = rules_engine.get_post_procedure_rules(procedure)
+        
+        # Build recovery instructions
+        instructions = _build_recovery_instructions(recovery_rules)
+        
+        # Create post-procedure data
+        post_data = {
+            "procedure": procedure,
+            "recovery_instructions": instructions,
+            "activity_restrictions": recovery_rules.get("activity_restrictions", []),
+            "medication_schedule": recovery_rules.get("medication_schedule", []),
+            "warning_signs": recovery_rules.get("warning_signs", []),
+            "follow_up_needed": recovery_rules.get("follow_up_needed", False),
+            "follow_up_timeframe": recovery_rules.get("follow_up_timeframe")
+        }
+        
+        state["post_procedure_data"] = post_data
+        
+        # Send recovery email
+        if raw.get("email"):
+            email_service.send_post_procedure_instructions(
+                to_email=raw["email"],
+                patient_name=raw.get("patient_name", "Patient"),
+                procedure=procedure,
+                instructions=instructions
+            )
+        
+        logger.info("Post-procedure plan generated")
+        
+    except Exception as e:
+        logger.error(f"Post-procedure tool error: {e}")
+        state["errors"].append(f"Post-procedure error: {str(e)}")
+    
+    return state
+
+
+# ============================================================================
+# HELPER FUNCTIONS FOR NEW TOOLS
+# ============================================================================
+
+def _build_recovery_instructions(recovery_rules: dict) -> str:
+    """Build formatted recovery instructions."""
+    parts = []
+    
+    parts.append("POST-PROCEDURE RECOVERY INSTRUCTIONS\n")
+    
+    if recovery_rules.get("rest_period"):
+        parts.append(f"REST PERIOD: {recovery_rules['rest_period']}")
+    
+    if recovery_rules.get("activity_restrictions"):
+        parts.append("\nACTIVITY RESTRICTIONS:")
+        for restriction in recovery_rules["activity_restrictions"]:
+            parts.append(f"  • {restriction}")
+    
+    if recovery_rules.get("medication_schedule"):
+        parts.append("\nMEDICATION SCHEDULE:")
+        for med in recovery_rules["medication_schedule"]:
+            parts.append(f"  • {med.get('name')}: {med.get('schedule')}")
+    
+    if recovery_rules.get("diet_guidance"):
+        parts.append(f"\nDIET: {recovery_rules['diet_guidance']}")
+    
+    if recovery_rules.get("warning_signs"):
+        parts.append("\n⚠️ CALL DOCTOR IF YOU EXPERIENCE:")
+        for sign in recovery_rules["warning_signs"]:
+            parts.append(f"  • {sign}")
+    
+    if recovery_rules.get("follow_up_needed"):
+        parts.append(f"\nFOLLOW-UP: Schedule appointment within {recovery_rules.get('follow_up_timeframe', '1-2 weeks')}")
+    
+    return "\n".join(parts)

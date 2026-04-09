@@ -370,3 +370,241 @@ function formatTimestamp(timestamp) {
         return timestamp;
     }
 }
+
+
+// ============================================================================
+// NEW FEATURES: Scheduling, Chat, Post-Procedure
+// ============================================================================
+
+/**
+ * Tab Navigation
+ */
+document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+        // Remove active from all tabs
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        
+        // Add active to clicked tab
+        e.target.classList.add('active');
+        const tabId = 'tab-' + e.target.dataset.tab;
+        document.getElementById(tabId).classList.add('active');
+    });
+});
+
+/**
+ * Scheduling Feature
+ */
+document.getElementById('get-slots-btn')?.addEventListener('click', async () => {
+    const appointmentType = document.getElementById('schedule-type').value;
+    
+    try {
+        const response = await fetch('/api/slots', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ appointment_type: appointmentType })
+        });
+        
+        const result = await response.json();
+        
+        if (result.error) {
+            alert('Failed to get slots: ' + result.messages.join(', '));
+            return;
+        }
+        
+        displaySlots(result.slots);
+    } catch (error) {
+        console.error('Get slots error:', error);
+        alert('Failed to get available slots');
+    }
+});
+
+function displaySlots(slots) {
+    const container = document.getElementById('slots-container');
+    const slotsList = document.getElementById('slots-list');
+    
+    if (!slots || slots.length === 0) {
+        slotsList.innerHTML = '<p>No available slots found</p>';
+        container.style.display = 'block';
+        return;
+    }
+    
+    slotsList.innerHTML = slots.map(slot => `
+        <div class="slot-card">
+            <div class="slot-time">${escapeHtml(slot.start_formatted)}</div>
+            <div class="slot-doctor">${escapeHtml(slot.doctor)}</div>
+            <div class="slot-location">${escapeHtml(slot.location)}</div>
+            <button class="btn-book" data-slot='${JSON.stringify(slot)}'>Book This Slot</button>
+        </div>
+    `).join('');
+    
+    container.style.display = 'block';
+    
+    // Add book button listeners
+    document.querySelectorAll('.btn-book').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const slot = JSON.parse(e.target.dataset.slot);
+            bookSlot(slot);
+        });
+    });
+}
+
+async function bookSlot(slot) {
+    const patientName = prompt('Enter patient name:');
+    if (!patientName) return;
+    
+    try {
+        const response = await fetch('/api/book', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                slot: slot,
+                patient_name: patientName,
+                appointment_type: document.getElementById('schedule-type').value,
+                procedure: 'General Appointment'
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (result.error) {
+            alert('Booking failed: ' + result.messages.join(', '));
+            return;
+        }
+        
+        // Show confirmation
+        document.getElementById('slots-container').style.display = 'none';
+        document.getElementById('booking-details').textContent = 
+            `Appointment booked for ${patientName} on ${slot.start_formatted}`;
+        document.getElementById('booking-confirmation').style.display = 'block';
+        
+        setTimeout(() => {
+            document.getElementById('booking-confirmation').style.display = 'none';
+        }, 5000);
+    } catch (error) {
+        console.error('Booking error:', error);
+        alert('Failed to book appointment');
+    }
+}
+
+/**
+ * Chat Feature
+ */
+let chatSessionId = 'session_' + Date.now();
+
+document.getElementById('chat-send-btn')?.addEventListener('click', sendChatMessage);
+document.getElementById('chat-input')?.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') sendChatMessage();
+});
+
+async function sendChatMessage() {
+    const input = document.getElementById('chat-input');
+    const question = input.value.trim();
+    
+    if (!question) return;
+    
+    // Add user message to chat
+    addChatMessage('patient', question);
+    input.value = '';
+    
+    try {
+        const response = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                question: question,
+                session_id: chatSessionId,
+                appointment_type: 'General',
+                procedure: 'General'
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (result.error) {
+            addChatMessage('agent', 'Sorry, I encountered an error. Please try again.');
+            return;
+        }
+        
+        // Add agent response
+        addChatMessage('agent', result.response);
+    } catch (error) {
+        console.error('Chat error:', error);
+        addChatMessage('agent', 'Sorry, I encountered an error. Please try again.');
+    }
+}
+
+function addChatMessage(role, content) {
+    const messagesContainer = document.getElementById('chat-messages');
+    
+    // Remove welcome message if present
+    const welcome = messagesContainer.querySelector('.chat-welcome');
+    if (welcome) welcome.remove();
+    
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `chat-message chat-${role}`;
+    messageDiv.innerHTML = `
+        <div class="chat-avatar">${role === 'patient' ? '👤' : '🤖'}</div>
+        <div class="chat-bubble">${escapeHtml(content)}</div>
+    `;
+    
+    messagesContainer.appendChild(messageDiv);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+/**
+ * Post-Procedure Recovery Feature
+ */
+document.getElementById('get-recovery-btn')?.addEventListener('click', async () => {
+    const procedure = document.getElementById('recovery-procedure').value;
+    
+    try {
+        const response = await fetch('/api/post-procedure', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                procedure: procedure,
+                patient_name: 'Patient'
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (result.error) {
+            alert('Failed to get recovery plan: ' + result.messages.join(', '));
+            return;
+        }
+        
+        displayRecoveryPlan(result.recovery_plan);
+    } catch (error) {
+        console.error('Recovery plan error:', error);
+        alert('Failed to get recovery plan');
+    }
+});
+
+function displayRecoveryPlan(plan) {
+    const container = document.getElementById('recovery-plan');
+    
+    container.innerHTML = `
+        <div class="recovery-content">
+            <h3>Recovery Instructions</h3>
+            <pre>${escapeHtml(plan.instructions)}</pre>
+            
+            ${plan.activity_restrictions && plan.activity_restrictions.length > 0 ? `
+                <h4>Activity Restrictions</h4>
+                <ul>
+                    ${plan.activity_restrictions.map(r => `<li>${escapeHtml(r)}</li>`).join('')}
+                </ul>
+            ` : ''}
+            
+            ${plan.warning_signs && plan.warning_signs.length > 0 ? `
+                <h4 class="warning-header">⚠️ Warning Signs - Call Doctor If:</h4>
+                <ul class="warning-list">
+                    ${plan.warning_signs.map(s => `<li>${escapeHtml(s)}</li>`).join('')}
+                </ul>
+            ` : ''}
+        </div>
+    `;
+    
+    container.style.display = 'block';
+}

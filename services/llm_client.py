@@ -1,15 +1,24 @@
 """
-LLM Client for OpenAI API integration with graceful fallback.
+LLM Client for OpenRouter API integration with graceful fallback.
 
-This module provides a safe interface to OpenAI's API for message rewriting.
+This module provides a safe interface to OpenRouter's API for message rewriting.
+Uses a 4-tier fallback system with free models:
+1. google/gemma-4-31b-it:free (Primary)
+2. google/gemma-4-26b-a4b-it:free (Fallback 1)
+3. nvidia/nemotron-3-super-120b-a12b:free (Fallback 2)
+4. meta-llama/llama-3.3-70b-instruct:free (Fallback 3)
+5. Template-based responses (Final fallback)
+
 The client handles API failures gracefully by returning None, allowing the
 system to fall back to template-based message generation.
 
 Key Safety Features:
 - Timeout handling (5 seconds) for all API calls
+- Four-tier model fallback chain
 - Graceful error handling with None returns
 - System prompts that prevent medical instruction invention
 - Availability checking before API calls
+- Free model usage (no costs)
 """
 
 from typing import Optional
@@ -18,42 +27,68 @@ import os
 
 class LLMClient:
     """
-    Interface to OpenAI API with graceful fallback.
+    Interface to OpenRouter API with graceful fallback.
     
-    The LLM client manages connections to OpenAI's API and provides methods
-    for message rewriting and generation. All methods handle errors gracefully
-    and return None on failure, allowing the system to fall back to template-based
-    generation.
+    The LLM client manages connections to OpenRouter's API and provides methods
+    for message rewriting and generation. Uses a 4-tier fallback system with
+    free models, automatically trying each model in sequence until one succeeds.
+    All methods handle errors gracefully and return None on failure, allowing 
+    the system to fall back to template-based generation.
     
     Attributes:
-        api_key: OpenAI API key (None if unavailable)
+        api_key: OpenRouter API key (None if unavailable)
         available: Boolean indicating if LLM is available for use
         timeout: Timeout in seconds for API calls (default: 5)
+        models: List of models to try in order (4-tier fallback)
     """
     
-    def __init__(self, api_key: Optional[str] = None, timeout: int = 5):
+    def __init__(self, api_key: Optional[str] = None, timeout: int = 5, 
+                 models: Optional[list] = None):
         """
         Initialize LLM client with optional API key.
         
         Args:
-            api_key: OpenAI API key. If None, client operates in fallback mode.
+            api_key: OpenRouter API key. If None, client operates in fallback mode.
             timeout: Timeout in seconds for API calls (default: 5)
+            models: List of models to try in order. If None, uses default 4-tier fallback:
+                   1. google/gemma-4-31b-it:free
+                   2. google/gemma-4-26b-a4b-it:free
+                   3. nvidia/nemotron-3-super-120b-a12b:free
+                   4. meta-llama/llama-3.3-70b-instruct:free
         
         Postconditions:
             - self.available is True if api_key is not None and not empty
             - self.available is False if api_key is None or empty
             - self.timeout is set to provided value
+            - self.models is set to provided list or default fallback chain
         """
         self.api_key = api_key
         self.available = api_key is not None and api_key.strip() != ""
         self.timeout = timeout
+        
+        # Default 4-tier fallback chain
+        if models is None:
+            self.models = [
+                "google/gemma-4-31b-it:free",
+                "google/gemma-4-26b-a4b-it:free",
+                "nvidia/nemotron-3-super-120b-a12b:free",
+                "meta-llama/llama-3.3-70b-instruct:free"
+            ]
+        else:
+            self.models = models
+        
         self._client = None
         
-        # Initialize OpenAI client if API key is available
+        # Initialize OpenAI-compatible client for OpenRouter if API key is available
         if self.available:
             try:
                 from openai import OpenAI
-                self._client = OpenAI(api_key=self.api_key, timeout=self.timeout)
+                # OpenRouter uses OpenAI-compatible API
+                self._client = OpenAI(
+                    api_key=self.api_key,
+                    base_url="https://openrouter.ai/api/v1",
+                    timeout=self.timeout
+                )
             except Exception:
                 # If OpenAI import or initialization fails, mark as unavailable
                 self.available = False
@@ -118,36 +153,41 @@ class LLMClient:
             f"- Maintain the same level of detail and completeness"
         )
         
-        try:
-            response = self._client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": structured_content}
-                ],
-                temperature=0.7,
-                max_tokens=1000
-            )
-            
-            # Extract the rewritten message
-            rewritten = response.choices[0].message.content
-            
-            # Validate that we got a non-empty response
-            if rewritten and rewritten.strip():
-                return rewritten.strip()
-            else:
-                return None
+        # Try each model in the fallback chain
+        for i, model in enumerate(self.models):
+            try:
+                response = self._client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": structured_content}
+                    ],
+                    temperature=0.7,
+                    max_tokens=1000
+                )
                 
-        except Exception as e:
-            # Log warning when LLM API fails (Requirement 8.3, 8.4)
-            # Do not log API keys or sensitive data (Requirement 9.7)
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.warning(f"LLM API call failed: {type(e).__name__}")
-            
-            # On any error (timeout, API error, network error), return None
-            # This triggers fallback to template-based generation
-            return None
+                # Extract the rewritten message
+                rewritten = response.choices[0].message.content
+                
+                # Validate that we got a non-empty response
+                if rewritten and rewritten.strip():
+                    if i > 0:
+                        # Log success if using fallback model
+                        logger.info(f"Model {model} (fallback #{i}) succeeded")
+                    return rewritten.strip()
+                    
+            except Exception as e:
+                # Log warning and try next model
+                import logging
+                logger = logging.getLogger(__name__)
+                
+                if i < len(self.models) - 1:
+                    logger.warning(f"Model {model} failed: {type(e).__name__}, trying next model")
+                else:
+                    logger.warning(f"All {len(self.models)} models failed, using template fallback")
+        
+        # All models failed, return None to trigger template fallback
+        return None
     
     def generate_with_prompt(self, system_prompt: str, user_content: str) -> Optional[str]:
         """
@@ -184,32 +224,38 @@ class LLMClient:
         if not user_content or not user_content.strip():
             return None
         
-        try:
-            response = self._client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content}
-                ],
-                temperature=0.7,
-                max_tokens=1000
-            )
-            
-            # Extract the generated text
-            generated = response.choices[0].message.content
-            
-            # Validate that we got a non-empty response
-            if generated and generated.strip():
-                return generated.strip()
-            else:
-                return None
+        # Try each model in the fallback chain
+        for i, model in enumerate(self.models):
+            try:
+                response = self._client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content}
+                    ],
+                    temperature=0.7,
+                    max_tokens=1000
+                )
                 
-        except Exception as e:
-            # Log warning when LLM API fails (Requirement 8.3, 8.4)
-            # Do not log API keys or sensitive data (Requirement 9.7)
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.warning(f"LLM API call failed: {type(e).__name__}")
-            
-            # On any error (timeout, API error, network error), return None
-            return None
+                # Extract the generated text
+                generated = response.choices[0].message.content
+                
+                # Validate that we got a non-empty response
+                if generated and generated.strip():
+                    if i > 0:
+                        # Log success if using fallback model
+                        logger.info(f"Model {model} (fallback #{i}) succeeded")
+                    return generated.strip()
+                    
+            except Exception as e:
+                # Log warning and try next model
+                import logging
+                logger = logging.getLogger(__name__)
+                
+                if i < len(self.models) - 1:
+                    logger.warning(f"Model {model} failed: {type(e).__name__}, trying next model")
+                else:
+                    logger.warning(f"All {len(self.models)} models failed")
+        
+        # All models failed, return None
+        return None

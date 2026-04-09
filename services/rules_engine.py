@@ -181,3 +181,120 @@ class RulesEngine:
         
         # No fasting required
         return (False, 0)
+
+    
+    def get_post_procedure_rules(self, procedure: str) -> Dict:
+        """
+        Get post-procedure recovery rules based on procedure type.
+        
+        Args:
+            procedure: Procedure name
+        
+        Returns:
+            Dictionary with recovery instructions, restrictions, and warnings
+        """
+        proc_lower = procedure.lower()
+        
+        # Surgery recovery rules
+        if "surgery" in proc_lower:
+            return {
+                "rest_period": "24-48 hours of complete rest",
+                "activity_restrictions": [
+                    "No driving for 24 hours",
+                    "No heavy lifting (>10 lbs) for 1 week",
+                    "No strenuous exercise for 2 weeks",
+                    "Avoid swimming/bathing for 48 hours"
+                ],
+                "medication_schedule": [
+                    {"name": "Pain medication", "schedule": "As prescribed, every 4-6 hours as needed"},
+                    {"name": "Antibiotics", "schedule": "Complete full course as prescribed"}
+                ],
+                "diet_guidance": "Start with clear liquids, advance to regular diet as tolerated",
+                "warning_signs": [
+                    "Fever over 101°F",
+                    "Excessive bleeding or drainage",
+                    "Severe pain not controlled by medication",
+                    "Signs of infection (redness, swelling, warmth)",
+                    "Difficulty breathing"
+                ],
+                "follow_up_needed": True,
+                "follow_up_timeframe": "1-2 weeks"
+            }
+        
+        # Colonoscopy recovery rules
+        elif "colonoscopy" in proc_lower:
+            return {
+                "rest_period": "Rest of the day",
+                "activity_restrictions": [
+                    "No driving for 24 hours (due to sedation)",
+                    "No important decisions or legal documents for 24 hours",
+                    "Avoid heavy lifting for 24 hours"
+                ],
+                "medication_schedule": [
+                    {"name": "Resume regular medications", "schedule": "As directed by doctor"}
+                ],
+                "diet_guidance": "Light meals for remainder of day, resume normal diet next day",
+                "warning_signs": [
+                    "Severe abdominal pain",
+                    "Rectal bleeding (more than small amount)",
+                    "Fever or chills",
+                    "Dizziness or weakness"
+                ],
+                "follow_up_needed": True,
+                "follow_up_timeframe": "1-2 weeks for results discussion"
+            }
+        
+        # MRI/Imaging recovery rules
+        elif "mri" in proc_lower or "ct" in proc_lower:
+            return {
+                "rest_period": "None required",
+                "activity_restrictions": [
+                    "If contrast used: Drink plenty of water for 24 hours"
+                ],
+                "medication_schedule": [],
+                "diet_guidance": "Resume normal diet immediately",
+                "warning_signs": [
+                    "Allergic reaction (rash, itching, difficulty breathing)",
+                    "Severe headache or dizziness"
+                ],
+                "follow_up_needed": True,
+                "follow_up_timeframe": "As scheduled by your doctor for results"
+            }
+        
+        # Blood test recovery rules
+        elif "blood" in proc_lower or "lab" in proc_lower:
+            return {
+                "rest_period": "None required",
+                "activity_restrictions": [
+                    "Keep bandage on for 2-4 hours",
+                    "Avoid heavy lifting with that arm for 2 hours"
+                ],
+                "medication_schedule": [],
+                "diet_guidance": "Resume normal diet immediately",
+                "warning_signs": [
+                    "Excessive bleeding",
+                    "Bruising that worsens",
+                    "Signs of infection at puncture site"
+                ],
+                "follow_up_needed": True,
+                "follow_up_timeframe": "As scheduled by your doctor for results"
+            }
+        
+        # Default recovery rules
+        else:
+            return {
+                "rest_period": "As advised by your doctor",
+                "activity_restrictions": [
+                    "Follow your doctor's specific instructions"
+                ],
+                "medication_schedule": [],
+                "diet_guidance": "Resume normal diet unless instructed otherwise",
+                "warning_signs": [
+                    "Any unexpected symptoms",
+                    "Severe pain",
+                    "Fever",
+                    "Unusual bleeding or discharge"
+                ],
+                "follow_up_needed": True,
+                "follow_up_timeframe": "As scheduled by your doctor"
+            }

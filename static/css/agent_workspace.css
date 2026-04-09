@@ -58,7 +58,7 @@ body {
     grid-template-columns: 350px 1fr 350px;
     gap: 1rem;
     padding: 1rem;
-    height: calc(100vh - 80px);
+    height: 100%;
     max-width: 1800px;
     margin: 0 auto;
     width: 100%;
@@ -725,4 +725,358 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
     background: #a0aec0;
+}
+
+
+/* ============================================================================
+   NEW FEATURES: Tabs, Scheduling, Chat, Post-Procedure
+   ============================================================================ */
+
+/* Tab Navigation */
+.tab-navigation {
+    display: flex;
+    gap: 10px;
+    padding: 15px 20px;
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(10px);
+    border-bottom: 2px solid #e2e8f0;
+    max-width: 1800px;
+    margin: 0 auto;
+    width: 100%;
+}
+
+.tab-btn {
+    padding: 12px 24px;
+    background: white;
+    border: 2px solid #e2e8f0;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.2s;
+}
+
+.tab-btn:hover {
+    background: #edf2f7;
+    border-color: #cbd5e0;
+}
+
+.tab-btn.active {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border-color: #667eea;
+}
+
+.tab-content {
+    display: none;
+    width: 100%;
+    flex: 1;
+    overflow-y: auto;
+}
+
+.tab-content.active {
+    display: flex;
+    flex-direction: column;
+}
+
+/* Scheduling Styles */
+.schedule-container,
+.chat-container,
+.recovery-container {
+    width: 100%;
+    margin: 0 auto;
+    padding: 40px 20px;
+    flex: 1;
+    overflow-y: auto;
+    background: white;
+}
+
+.schedule-container h2,
+.chat-container h2,
+.recovery-container h2 {
+    color: #2d3748;
+    margin-bottom: 30px;
+    font-size: 1.75rem;
+}
+
+.schedule-form,
+.recovery-form {
+    background: white;
+    padding: 30px;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    margin-bottom: 30px;
+}
+
+.schedule-form .form-group,
+.recovery-form .form-group {
+    margin-bottom: 20px;
+}
+
+.schedule-form label,
+.recovery-form label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: #2d3748;
+    font-size: 0.875rem;
+}
+
+.schedule-form select,
+.recovery-form select {
+    width: 100%;
+    padding: 10px;
+    border: 2px solid #e2e8f0;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    transition: all 0.2s;
+}
+
+.schedule-form select:focus,
+.recovery-form select:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.slots-container {
+    margin-top: 30px;
+}
+
+.slots-container h3 {
+    color: #2d3748;
+    margin-bottom: 20px;
+    font-size: 1.25rem;
+}
+
+.slots-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 20px;
+    margin-top: 20px;
+}
+
+.slot-card {
+    background: white;
+    padding: 20px;
+    border-radius: 12px;
+    border: 2px solid #e2e8f0;
+    transition: all 0.2s;
+}
+
+.slot-card:hover {
+    border-color: #4299e1;
+    box-shadow: 0 4px 12px rgba(66, 153, 225, 0.2);
+}
+
+.slot-time {
+    font-size: 16px;
+    font-weight: 600;
+    color: #2d3748;
+    margin-bottom: 8px;
+}
+
+.slot-doctor {
+    font-size: 14px;
+    color: #4a5568;
+    margin-bottom: 4px;
+}
+
+.slot-location {
+    font-size: 13px;
+    color: #718096;
+    margin-bottom: 15px;
+}
+
+.btn-book {
+    width: 100%;
+    padding: 10px;
+    background: #48bb78;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background 0.2s;
+}
+
+.btn-book:hover {
+    background: #38a169;
+}
+
+.booking-confirmation {
+    background: #f0fff4;
+    border: 2px solid #48bb78;
+    border-radius: 12px;
+    padding: 40px;
+    text-align: center;
+}
+
+.success-icon {
+    font-size: 48px;
+    color: #48bb78;
+    margin-bottom: 20px;
+}
+
+/* Chat Styles */
+.chat-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    background: white;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.chat-welcome {
+    text-align: center;
+    color: #718096;
+    padding: 40px;
+}
+
+.chat-message {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+.chat-message.chat-agent {
+    flex-direction: row;
+}
+
+.chat-message.chat-patient {
+    flex-direction: row-reverse;
+}
+
+.chat-avatar {
+    font-size: 32px;
+    flex-shrink: 0;
+}
+
+.chat-bubble {
+    background: #edf2f7;
+    padding: 12px 16px;
+    border-radius: 12px;
+    max-width: 70%;
+    word-wrap: break-word;
+}
+
+.chat-patient .chat-bubble {
+    background: #4299e1;
+    color: white;
+}
+
+.chat-input-container {
+    display: flex;
+    gap: 10px;
+    align-items: stretch;
+    position: sticky;
+    bottom: 0;
+    background: white;
+    padding: 20px;
+    border-top: 2px solid #e2e8f0;
+    box-shadow: 0 -2px 10px rgba(0,0,0,0.05);
+}
+
+#chat-input {
+    flex: 0 0 80%;
+    padding: 16px;
+    border: 2px solid #e2e8f0;
+    border-radius: 8px;
+    font-size: 14px;
+    min-height: 50px;
+    resize: none;
+    font-family: inherit;
+}
+
+#chat-input:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+#chat-send-btn {
+    flex: 0 0 calc(20% - 10px);
+    padding: 16px 24px;
+    min-height: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+/* Recovery Plan Styles */
+.recovery-plan {
+    background: white;
+    padding: 30px;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    margin-top: 30px;
+}
+
+.recovery-content h3 {
+    color: #2d3748;
+    margin-bottom: 20px;
+}
+
+.recovery-content h4 {
+    color: #4a5568;
+    margin-top: 25px;
+    margin-bottom: 15px;
+}
+
+.recovery-content pre {
+    background: #f7fafc;
+    padding: 20px;
+    border-radius: 8px;
+    white-space: pre-wrap;
+    font-family: inherit;
+    line-height: 1.6;
+}
+
+.recovery-content ul {
+    list-style: disc;
+    padding-left: 25px;
+}
+
+.recovery-content li {
+    margin-bottom: 8px;
+    line-height: 1.6;
+}
+
+.warning-header {
+    color: #e53e3e !important;
+}
+
+.warning-list li {
+    color: #c53030;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .tab-navigation {
+        flex-wrap: wrap;
+    }
+    
+    .tab-btn {
+        flex: 1 1 45%;
+        font-size: 12px;
+        padding: 10px 12px;
+    }
+    
+    .slots-list {
+        grid-template-columns: 1fr;
+    }
+    
+    .chat-bubble {
+        max-width: 85%;
+    }
 }

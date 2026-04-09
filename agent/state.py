@@ -10,7 +10,42 @@ THREE-PHASE WORKFLOW:
 - Phase III: Clinical Briefing (EHR summary, clinician notes)
 """
 
-from typing import TypedDict, Optional, List, Dict, Any
+from typing import TypedDict, Optional, List, Dict, Any, Literal
+
+
+class SchedulingData(TypedDict):
+    """Scheduling information for appointment booking."""
+    available_slots: List[Dict[str, Any]]
+    selected_slot: Optional[Dict[str, Any]]
+    booking_confirmed: bool
+    event_id: Optional[str]
+    confirmation_sent: bool
+
+
+class PatientChatMessage(TypedDict):
+    """Patient chat message for Q&A."""
+    role: Literal["patient", "agent"]
+    content: str
+    timestamp: str
+    context_used: Optional[List[str]]
+
+
+class PostProcedureData(TypedDict):
+    """Post-procedure recovery plan."""
+    procedure: str
+    recovery_instructions: str
+    activity_restrictions: List[str]
+    medication_schedule: List[Dict[str, str]]
+    warning_signs: List[str]
+    follow_up_needed: bool
+    follow_up_timeframe: Optional[str]
+
+
+class AgentPhase(TypedDict):
+    """Current phase of the agent workflow."""
+    current_phase: Literal["scheduling", "intake", "prep", "chat", "post_procedure"]
+    completed_phases: List[str]
+    next_phase: Optional[str]
 
 
 class IntakeData(TypedDict):
@@ -83,7 +118,10 @@ class AgentState(TypedDict):
     State object that flows through the LangGraph agent.
     
     This state is passed between nodes and accumulates information
-    as the agent progresses through its THREE-PHASE workflow.
+    as the agent progresses through its MULTI-PHASE workflow.
+    
+    PHASE 0: SCHEDULING (NEW)
+        - scheduling_data: Available slots and booking info
     
     PHASE I: TRIAGE & INTAKE
         - raw_intake: User's initial input
@@ -98,18 +136,31 @@ class AgentState(TypedDict):
         - ehr_context: Patient history and records
         - clinical_briefing: Doctor-facing summary
     
+    PHASE IV: PATIENT CHAT (NEW)
+        - chat_history: Patient Q&A messages
+    
+    PHASE V: POST-PROCEDURE (NEW)
+        - post_procedure_data: Recovery instructions
+    
     OUTPUTS:
         - patient_message: Patient-facing prep instructions
         - clinician_summary: Clinician-facing briefing
         - prep_sections: Structured patient prep sections
     
     METADATA:
+        - agent_phase: Current workflow phase
         - errors: Error messages
         - reasoning_trace: Step-by-step agent reasoning
         - metadata: Timestamps and execution info
         - llm_used: Whether LLM was used
         - saved_record_id: Database ID
     """
+    # Phase tracking
+    agent_phase: Optional[AgentPhase]
+    
+    # Phase 0: Scheduling
+    scheduling_data: Optional[SchedulingData]
+    
     # Phase I: Triage & Intake
     raw_intake: Dict[str, Any]
     intake_data: Optional[IntakeData]
@@ -122,6 +173,12 @@ class AgentState(TypedDict):
     # Phase III: Clinical Briefing
     ehr_context: Optional[Dict[str, Any]]
     clinical_briefing: Optional[ClinicalBriefingData]
+    
+    # Phase IV: Patient Chat
+    chat_history: Optional[List[PatientChatMessage]]
+    
+    # Phase V: Post-Procedure
+    post_procedure_data: Optional[PostProcedureData]
     
     # Legacy fields (for backward compatibility)
     input_data: Dict[str, Any]
@@ -160,6 +217,12 @@ def create_initial_state(raw_intake: Dict[str, Any]) -> AgentState:
         AgentState with initialized fields
     """
     return AgentState(
+        # Phase tracking
+        agent_phase=None,
+        
+        # Phase 0: Scheduling
+        scheduling_data=None,
+        
         # Phase I: Triage & Intake
         raw_intake=raw_intake,
         intake_data=None,
@@ -172,6 +235,12 @@ def create_initial_state(raw_intake: Dict[str, Any]) -> AgentState:
         # Phase III: Clinical Briefing
         ehr_context=raw_intake.get("ehr_context"),
         clinical_briefing=None,
+        
+        # Phase IV: Patient Chat
+        chat_history=None,
+        
+        # Phase V: Post-Procedure
+        post_procedure_data=None,
         
         # Legacy fields
         input_data=raw_intake,

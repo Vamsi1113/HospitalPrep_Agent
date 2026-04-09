@@ -31,6 +31,23 @@ openai>=1.6.0                   # OpenAI API client for message enhancement
                                 # Note: Application works without API key
 
 # ----------------------------------------------------------------------------
+# Communication Services (Optional)
+# ----------------------------------------------------------------------------
+twilio>=8.0.0                   # Twilio SMS service for appointment reminders
+                                # Note: Application works in mock mode without credentials
+sendgrid>=6.9.0                 # SendGrid email service for prep instructions
+                                # Note: Application works in mock mode without credentials
+
+# ----------------------------------------------------------------------------
+# Google Calendar Integration (Optional)
+# ----------------------------------------------------------------------------
+google-api-python-client>=2.0.0 # Google Calendar API client
+google-auth>=2.0.0              # Google authentication
+google-auth-oauthlib>=1.0.0     # OAuth2 flow for Google APIs
+google-auth-httplib2>=0.1.0     # HTTP library for Google Auth
+                                # Note: Application works in mock mode without credentials
+
+# ----------------------------------------------------------------------------
 # LangGraph Agent Framework (Required)
 # ----------------------------------------------------------------------------
 langgraph>=0.0.20               # LangGraph for agent orchestration

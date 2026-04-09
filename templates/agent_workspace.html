@@ -16,8 +16,17 @@
             </div>
         </header>
 
-        <!-- Main Workspace -->
-        <div class="workspace-container">
+        <!-- Tab Navigation -->
+        <nav class="tab-navigation">
+            <button class="tab-btn active" data-tab="prep">📋 Appointment Prep</button>
+            <button class="tab-btn" data-tab="schedule">📅 Schedule</button>
+            <button class="tab-btn" data-tab="chat">💬 Patient Q&A</button>
+            <button class="tab-btn" data-tab="recovery">🏥 Post-Procedure</button>
+        </nav>
+
+        <!-- Tab: Appointment Prep (Existing) -->
+        <div class="tab-content active" id="tab-prep">
+            <div class="workspace-container">
             <!-- Left Panel: Input Form -->
             <aside class="input-panel">
                 <div class="panel-header">
@@ -210,8 +219,83 @@
                     </div>
                 </div>
             </aside>
+            </div>
+        </div>
+        <!-- End Tab: Appointment Prep -->
+
+        <!-- Tab: Schedule -->
+        <div class="tab-content" id="tab-schedule">
+            <div class="schedule-container">
+                <h2>📅 Schedule Appointment</h2>
+                
+                <div class="schedule-form">
+                    <div class="form-group">
+                        <label>Appointment Type</label>
+                        <select id="schedule-type">
+                            <option value="Surgery">Surgery</option>
+                            <option value="Consultation">Consultation</option>
+                            <option value="Imaging">Imaging</option>
+                        </select>
+                    </div>
+                    
+                    <button id="get-slots-btn" class="btn-primary">Get Available Slots</button>
+                </div>
+
+                <div id="slots-container" class="slots-container" style="display:none;">
+                    <h3>Available Time Slots</h3>
+                    <div id="slots-list" class="slots-list"></div>
+                </div>
+
+                <div id="booking-confirmation" class="booking-confirmation" style="display:none;">
+                    <div class="success-icon">✓</div>
+                    <h3>Appointment Booked!</h3>
+                    <p id="booking-details"></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: Patient Q&A Chat -->
+        <div class="tab-content" id="tab-chat">
+            <div class="chat-container">
+                <h2>💬 Patient Q&A</h2>
+                
+                <div id="chat-messages" class="chat-messages">
+                    <div class="chat-welcome">
+                        <p>Ask me anything about your appointment preparation!</p>
+                    </div>
+                </div>
+
+                <div class="chat-input-container">
+                    <textarea id="chat-input" placeholder="Type your question..." rows="1"></textarea>
+                    <button id="chat-send-btn" class="btn-primary">Send</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: Post-Procedure Recovery -->
+        <div class="tab-content" id="tab-recovery">
+            <div class="recovery-container">
+                <h2>🏥 Post-Procedure Recovery</h2>
+                
+                <div class="recovery-form">
+                    <div class="form-group">
+                        <label>Procedure</label>
+                        <select id="recovery-procedure">
+                            <option value="Surgery">Surgery</option>
+                            <option value="Colonoscopy">Colonoscopy</option>
+                            <option value="MRI">MRI</option>
+                            <option value="Blood Test">Blood Test</option>
+                        </select>
+                    </div>
+                    
+                    <button id="get-recovery-btn" class="btn-primary">Get Recovery Plan</button>
+                </div>
+
+                <div id="recovery-plan" class="recovery-plan" style="display:none;"></div>
+            </div>
         </div>
     </div>
+    <!-- End Agent Workspace -->
 
     <script src="{{ url_for('static', filename='js/agent_workspace.js') }}"></script>
 </body>

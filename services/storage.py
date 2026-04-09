@@ -9,9 +9,12 @@ Validates: Requirements 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8
 
 import sqlite3
 import json
+import logging
 from typing import Optional, List, Dict
 from datetime import datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class StorageService:
@@ -245,6 +248,112 @@ class StorageService:
             cursor.execute("""
                 DELETE FROM messages WHERE id = ?
             """, (message_id,))
+            
+            rows_affected = cursor.rowcount
+            conn.commit()
+            conn.close()
+            
+            return rows_affected > 0
+            
+        except sqlite3.Error:
+            return False
+
+    
+    def save_session_state(self, session_id: str, state_data: Dict) -> bool:
+        """
+        Save session state for multi-phase workflows.
+        
+        Args:
+            session_id: Unique session identifier
+            state_data: Dictionary with session state
+        
+        Returns:
+            True if save successful, False otherwise
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Create sessions table if it doesn't exist
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS sessions (
+                    session_id TEXT PRIMARY KEY,
+                    state_data TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            
+            # Convert state_data to JSON
+            state_json = json.dumps(state_data)
+            timestamp = datetime.now().isoformat()
+            
+            # Insert or update session
+            cursor.execute("""
+                INSERT INTO sessions (session_id, state_data, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    state_data = excluded.state_data,
+                    updated_at = excluded.updated_at
+            """, (session_id, state_json, timestamp, timestamp))
+            
+            conn.commit()
+            conn.close()
+            
+            return True
+            
+        except sqlite3.Error as e:
+            logger.error(f"Session save error: {e}")
+            return False
+    
+    def get_session_state(self, session_id: str) -> Optional[Dict]:
+        """
+        Retrieve session state.
+        
+        Args:
+            session_id: Unique session identifier
+        
+        Returns:
+            Dictionary with session state, or None if not found
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT state_data FROM sessions WHERE session_id = ?
+            """, (session_id,))
+            
+            row = cursor.fetchone()
+            conn.close()
+            
+            if row is None:
+                return None
+            
+            # Parse JSON state_data
+            return json.loads(row["state_data"])
+            
+        except sqlite3.Error:
+            return None
+    
+    def delete_session_state(self, session_id: str) -> bool:
+        """
+        Delete session state.
+        
+        Args:
+            session_id: Unique session identifier
+        
+        Returns:
+            True if deletion successful, False otherwise
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                DELETE FROM sessions WHERE session_id = ?
+            """, (session_id,))
             
             rows_affected = cursor.rowcount
             conn.commit()

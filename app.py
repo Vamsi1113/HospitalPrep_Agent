@@ -13,6 +13,7 @@ Validates: Requirements 6.1-6.10, 8.1-8.3, 8.7, 9.1-9.3
 
 import os
 import json
+from datetime import datetime
 from flask import Flask, render_template, request, jsonify
 from dotenv import load_dotenv
 
@@ -22,6 +23,9 @@ from services.llm_client import LLMClient
 from services.storage import StorageService
 from services.prep_plan_builder import PrepPlanBuilder
 from services.retrieval import ProtocolRetrieval
+from services.calendar_service import CalendarService
+from services.sms_service import SMSService
+from services.email_service import EmailService
 from agent.graph import run_agent
 
 # Load environment variables from .env file
@@ -32,14 +36,17 @@ app = Flask(__name__)
 
 # Load configuration
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
-app.config['OPENAI_API_KEY'] = os.getenv('OPENAI_API_KEY')
+app.config['OPENROUTER_API_KEY'] = os.getenv('OPENROUTER_API_KEY')
 
 # Initialize services
 rules_engine = RulesEngine()
-llm_client = LLMClient(api_key=app.config['OPENAI_API_KEY'])
+llm_client = LLMClient(api_key=app.config['OPENROUTER_API_KEY'])
 message_builder = MessageBuilder(llm_client)
 prep_plan_builder = PrepPlanBuilder()
 retrieval_service = ProtocolRetrieval(protocols_dir="data/protocols")
+calendar_service = CalendarService()
+sms_service = SMSService()
+email_service = EmailService()
 storage = StorageService()
 
 # Initialize database on startup
@@ -284,6 +291,347 @@ def load_sample_case(case_id: int):
         return jsonify({
             "error": True,
             "messages": ["Failed to load sample case. Please try again."]
+        }), 500
+
+
+@app.route('/api/slots', methods=['POST'])
+def get_available_slots():
+    """
+    Get available appointment slots.
+    
+    Expects JSON with:
+    - appointment_type: Type of appointment
+    - preferred_date: Optional preferred date (ISO format)
+    - duration_minutes: Optional duration (default 30)
+    
+    Returns JSON with available slots.
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                "error": True,
+                "messages": ["No data provided"]
+            }), 400
+        
+        appointment_type = data.get("appointment_type", "Consultation")
+        preferred_date = data.get("preferred_date", "")
+        duration = data.get("duration_minutes", 30)
+        
+        slots = calendar_service.get_available_slots(
+            appointment_type=appointment_type,
+            preferred_date=preferred_date,
+            duration_minutes=duration
+        )
+        
+        return jsonify({
+            "error": False,
+            "slots": slots
+        }), 200
+        
+    except Exception as e:
+        app.logger.error(f"Get slots error: {type(e).__name__}: {str(e)}")
+        return jsonify({
+            "error": True,
+            "messages": ["Failed to retrieve available slots"]
+        }), 500
+
+
+@app.route('/api/book', methods=['POST'])
+def book_appointment():
+    """
+    Book an appointment slot.
+    
+    Expects JSON with:
+    - slot: Selected slot object
+    - patient_name: Patient name
+    - appointment_type: Type of appointment
+    - procedure: Procedure name
+    - email: Patient email (optional)
+    - phone: Patient phone (optional)
+    
+    Returns JSON with booking confirmation.
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or not data.get("slot"):
+            return jsonify({
+                "error": True,
+                "messages": ["No slot selected"]
+            }), 400
+        
+        slot = data["slot"]
+        
+        # Create calendar event
+        event_id = calendar_service.create_appointment_event(
+            title=f"{data.get('appointment_type', 'Appointment')} - {data.get('patient_name', 'Patient')}",
+            start_time=slot["start"],
+            end_time=slot["end"],
+            description=f"Procedure: {data.get('procedure', 'N/A')}",
+            attendee_email=data.get("email", ""),
+            location=slot.get("location", "Main Clinic")
+        )
+        
+        # Send confirmations
+        if data.get("phone"):
+            sms_service.send_booking_confirmation(
+                to_phone=data["phone"],
+                appointment_datetime=slot["start_formatted"],
+                doctor=slot.get("doctor", "Doctor TBD"),
+                location=slot.get("location", "Main Clinic")
+            )
+        
+        if data.get("email"):
+            email_service.send_booking_confirmation(
+                to_email=data["email"],
+                patient_name=data.get("patient_name", "Patient"),
+                appointment_datetime=slot["start_formatted"],
+                doctor=slot.get("doctor", "Doctor TBD"),
+                location=slot.get("location", "Main Clinic"),
+                prep_summary="Detailed prep instructions will be sent 24 hours before your appointment."
+            )
+        
+        return jsonify({
+            "error": False,
+            "event_id": event_id,
+            "message": "Appointment booked successfully"
+        }), 200
+        
+    except Exception as e:
+        app.logger.error(f"Book appointment error: {type(e).__name__}: {str(e)}")
+        return jsonify({
+            "error": True,
+            "messages": ["Failed to book appointment"]
+        }), 500
+
+
+@app.route('/api/cancel', methods=['POST'])
+def cancel_appointment():
+    """
+    Cancel an appointment.
+    
+    Expects JSON with:
+    - event_id: Calendar event ID
+    - phone: Patient phone (optional, for SMS notification)
+    - appointment_datetime: Formatted date/time for notification
+    
+    Returns JSON with cancellation confirmation.
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or not data.get("event_id"):
+            return jsonify({
+                "error": True,
+                "messages": ["No event ID provided"]
+            }), 400
+        
+        # Cancel calendar event
+        success = calendar_service.cancel_appointment(data["event_id"])
+        
+        if not success:
+            return jsonify({
+                "error": True,
+                "messages": ["Failed to cancel appointment"]
+            }), 500
+        
+        # Send cancellation notice
+        if data.get("phone"):
+            sms_service.send_cancellation_notice(
+                to_phone=data["phone"],
+                appointment_datetime=data.get("appointment_datetime", "your appointment")
+            )
+        
+        return jsonify({
+            "error": False,
+            "message": "Appointment cancelled successfully"
+        }), 200
+        
+    except Exception as e:
+        app.logger.error(f"Cancel appointment error: {type(e).__name__}: {str(e)}")
+        return jsonify({
+            "error": True,
+            "messages": ["Failed to cancel appointment"]
+        }), 500
+
+
+@app.route('/api/chat', methods=['POST'])
+def patient_chat():
+    """
+    Handle patient Q&A chat.
+    
+    Expects JSON with:
+    - question: Patient question
+    - session_id: Session identifier
+    - appointment_type: Type of appointment (for context)
+    - procedure: Procedure name (for context)
+    
+    Returns JSON with agent response.
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or not data.get("question"):
+            return jsonify({
+                "error": True,
+                "messages": ["No question provided"]
+            }), 400
+        
+        session_id = data.get("session_id", "default")
+        
+        # Get or create session state
+        session_state = storage.get_session_state(session_id)
+        if not session_state:
+            session_state = {
+                "chat_history": [],
+                "appointment_type": data.get("appointment_type", ""),
+                "procedure": data.get("procedure", "")
+            }
+        
+        # Add patient question
+        session_state["chat_history"].append({
+            "role": "patient",
+            "content": data["question"],
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        # Generate response using retrieval + LLM
+        context_docs = []
+        if retrieval_service and retrieval_service.is_available():
+            protocols = retrieval_service.retrieve_protocols(
+                appointment_type=session_state.get("appointment_type", ""),
+                procedure=session_state.get("procedure", ""),
+                max_results=2
+            )
+            context_docs = [p.get("content", "") for p in protocols]
+        
+        if llm_client and llm_client.is_available():
+            context_str = "\n\n".join(context_docs)
+            prompt = f"""You are a helpful medical appointment assistant. Answer the patient's question based on the context provided.
+
+Context:
+{context_str}
+
+Patient Question: {data['question']}
+
+Provide a clear, helpful answer. If the question is outside the scope of appointment preparation, politely redirect to contacting the clinic."""
+            
+            response = llm_client.generate_with_prompt(
+                "You are a medical appointment assistant.",
+                prompt
+            )
+        else:
+            response = "I'm here to help with appointment preparation questions. For specific medical advice, please contact your doctor."
+        
+        # Add agent response
+        session_state["chat_history"].append({
+            "role": "agent",
+            "content": response,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        # Save session state
+        storage.save_session_state(session_id, session_state)
+        
+        return jsonify({
+            "error": False,
+            "response": response,
+            "chat_history": session_state["chat_history"]
+        }), 200
+        
+    except Exception as e:
+        app.logger.error(f"Chat error: {type(e).__name__}: {str(e)}")
+        return jsonify({
+            "error": True,
+            "messages": ["Failed to process chat message"]
+        }), 500
+
+
+@app.route('/api/post-procedure', methods=['POST'])
+def post_procedure():
+    """
+    Generate post-procedure recovery plan.
+    
+    Expects JSON with:
+    - procedure: Procedure name
+    - patient_name: Patient name
+    - email: Patient email (optional, for sending instructions)
+    
+    Returns JSON with recovery plan.
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or not data.get("procedure"):
+            return jsonify({
+                "error": True,
+                "messages": ["No procedure specified"]
+            }), 400
+        
+        procedure = data["procedure"]
+        
+        # Get post-procedure rules
+        recovery_rules = rules_engine.get_post_procedure_rules(procedure)
+        
+        # Build recovery instructions
+        instructions_parts = []
+        instructions_parts.append("POST-PROCEDURE RECOVERY INSTRUCTIONS\n")
+        
+        if recovery_rules.get("rest_period"):
+            instructions_parts.append(f"REST PERIOD: {recovery_rules['rest_period']}")
+        
+        if recovery_rules.get("activity_restrictions"):
+            instructions_parts.append("\nACTIVITY RESTRICTIONS:")
+            for restriction in recovery_rules["activity_restrictions"]:
+                instructions_parts.append(f"  • {restriction}")
+        
+        if recovery_rules.get("medication_schedule"):
+            instructions_parts.append("\nMEDICATION SCHEDULE:")
+            for med in recovery_rules["medication_schedule"]:
+                instructions_parts.append(f"  • {med.get('name')}: {med.get('schedule')}")
+        
+        if recovery_rules.get("diet_guidance"):
+            instructions_parts.append(f"\nDIET: {recovery_rules['diet_guidance']}")
+        
+        if recovery_rules.get("warning_signs"):
+            instructions_parts.append("\n⚠️ CALL DOCTOR IF YOU EXPERIENCE:")
+            for sign in recovery_rules["warning_signs"]:
+                instructions_parts.append(f"  • {sign}")
+        
+        if recovery_rules.get("follow_up_needed"):
+            instructions_parts.append(f"\nFOLLOW-UP: Schedule appointment within {recovery_rules.get('follow_up_timeframe', '1-2 weeks')}")
+        
+        instructions = "\n".join(instructions_parts)
+        
+        # Send recovery email if email provided
+        if data.get("email"):
+            email_service.send_post_procedure_instructions(
+                to_email=data["email"],
+                patient_name=data.get("patient_name", "Patient"),
+                procedure=procedure,
+                instructions=instructions
+            )
+        
+        return jsonify({
+            "error": False,
+            "recovery_plan": {
+                "procedure": procedure,
+                "instructions": instructions,
+                "activity_restrictions": recovery_rules.get("activity_restrictions", []),
+                "medication_schedule": recovery_rules.get("medication_schedule", []),
+                "warning_signs": recovery_rules.get("warning_signs", []),
+                "follow_up_needed": recovery_rules.get("follow_up_needed", False),
+                "follow_up_timeframe": recovery_rules.get("follow_up_timeframe")
+            }
+        }), 200
+        
+    except Exception as e:
+        app.logger.error(f"Post-procedure error: {type(e).__name__}: {str(e)}")
+        return jsonify({
+            "error": True,
+            "messages": ["Failed to generate recovery plan"]
         }), 500
 
 
