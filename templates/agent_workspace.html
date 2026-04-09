@@ -3,299 +3,648 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Three-Phase Appointment Prep AI Agent</title>
+    <title>PrepCare Agent — AI-Powered Pre-Appointment Intelligence</title>
+    <meta name="description" content="LangGraph-powered AI agent for intelligent appointment preparation, triage, and clinical briefings.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/agent_workspace.css') }}">
 </head>
 <body>
-    <div class="agent-workspace">
-        <!-- Header -->
-        <header class="workspace-header">
-            <div class="header-content">
-                <h1 class="agent-title">🏥 Three-Phase Appointment Prep Agent</h1>
-                <p class="agent-subtitle">Triage • Admin Prep • Clinical Briefing</p>
-            </div>
-        </header>
+    <div class="app-shell">
 
-        <!-- Tab Navigation -->
-        <nav class="tab-navigation">
-            <button class="tab-btn active" data-tab="prep">📋 Appointment Prep</button>
-            <button class="tab-btn" data-tab="schedule">📅 Schedule</button>
-            <button class="tab-btn" data-tab="chat">💬 Patient Q&A</button>
-            <button class="tab-btn" data-tab="recovery">🏥 Post-Procedure</button>
+        <!-- ═══════════════════════════════════════════
+             SIDEBAR
+        ═══════════════════════════════════════════ -->
+        <nav class="sidebar" id="sidebar">
+            <!-- Logo -->
+            <div class="sidebar-logo">
+                <div class="logo-mark">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                        <path d="M12 2L2 7L12 12L22 7L12 2Z" fill="#9CD5FF"/>
+                        <path d="M2 17L12 22L22 17" stroke="rgba(255,255,255,0.7)" stroke-width="2" fill="none"/>
+                        <path d="M2 12L12 17L22 12" stroke="#9CD5FF" stroke-width="2" fill="none"/>
+                    </svg>
+                </div>
+                <span class="logo-name">PrepCare</span>
+            </div>
+
+            <div class="sidebar-divider"></div>
+
+            <!-- Nav items -->
+            <div class="sidebar-nav">
+                <button class="nav-item active" data-view="intake" id="nav-intake" title="Patient Intake">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M9 12h6M9 16h6M17 4H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V6a2 2 0 00-2-2z"/>
+                        <path d="M9 4v2a1 1 0 001 1h4a1 1 0 001-1V4"/>
+                    </svg>
+                    <span class="nav-label">Intake</span>
+                </button>
+
+                <button class="nav-item" data-view="schedule" id="nav-schedule" title="Scheduling">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="4" width="18" height="18" rx="2"/>
+                        <path d="M16 2v4M8 2v4M3 10h18"/>
+                        <circle cx="8" cy="15" r="1" fill="currentColor"/>
+                        <circle cx="12" cy="15" r="1" fill="currentColor"/>
+                        <circle cx="16" cy="15" r="1" fill="currentColor"/>
+                    </svg>
+                    <span class="nav-label">Schedule</span>
+                </button>
+
+                <button class="nav-item" data-view="chat" id="nav-chat" title="Patient Q&A">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+                    </svg>
+                    <span class="nav-label">Chat</span>
+                </button>
+
+                <button class="nav-item" data-view="recovery" id="nav-recovery" title="Post-Procedure">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                    </svg>
+                    <span class="nav-label">Recovery</span>
+                </button>
+            </div>
+
+            <div class="sidebar-divider"></div>
+
+            <!-- Bottom items -->
+            <div class="sidebar-bottom">
+                <button class="nav-item" data-view="history" id="nav-history" title="Case History">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M12 6v6l4 2"/>
+                    </svg>
+                    <span class="nav-label">History</span>
+                </button>
+            </div>
         </nav>
 
-        <!-- Tab: Appointment Prep (Existing) -->
-        <div class="tab-content active" id="tab-prep">
-            <div class="workspace-container">
-            <!-- Left Panel: Input Form -->
-            <aside class="input-panel">
-                <div class="panel-header">
-                    <h2>📋 Patient Intake</h2>
-                </div>
-                
-                <form id="agent-form" class="agent-form">
-                    <!-- Patient Name -->
-                    <div class="form-group">
-                        <label for="patient_name">Patient Name</label>
-                        <input type="text" id="patient_name" name="patient_name" required maxlength="100" placeholder="John Smith">
-                    </div>
+        <!-- ═══════════════════════════════════════════
+             MAIN CONTENT AREA
+        ═══════════════════════════════════════════ -->
+        <div class="main-content">
 
-                    <!-- Chief Complaint -->
-                    <div class="form-group">
-                        <label for="chief_complaint">Chief Complaint / Symptoms</label>
-                        <input type="text" id="chief_complaint" name="chief_complaint" required maxlength="200" placeholder="e.g., chest feels heavy, dizzy spells">
-                    </div>
-
-                    <!-- Symptom Details -->
-                    <div class="form-group">
-                        <label for="symptoms_description">Symptom Details</label>
-                        <textarea id="symptoms_description" name="symptoms_description" rows="3" placeholder="When did it start? How severe? What makes it better/worse?"></textarea>
-                    </div>
-
-                    <!-- Current Medications -->
-                    <div class="form-group">
-                        <label for="current_medications">Current Medications</label>
-                        <input type="text" id="current_medications" name="current_medications" placeholder="e.g., lisinopril, atorvastatin (comma-separated)">
-                    </div>
-
-                    <!-- Allergies -->
-                    <div class="form-group">
-                        <label for="allergies">Allergies</label>
-                        <input type="text" id="allergies" name="allergies" placeholder="e.g., penicillin, sulfa drugs (comma-separated)">
-                    </div>
-
-                    <!-- Age Group -->
-                    <div class="form-group">
-                        <label for="age_group">Age Group</label>
-                        <select id="age_group" name="age_group">
-                            <option value="">Select age range...</option>
-                            <option value="18-30">18-30</option>
-                            <option value="30-40">30-40</option>
-                            <option value="40-50">40-50</option>
-                            <option value="50-60">50-60</option>
-                            <option value="60-70">60-70</option>
-                            <option value="70-80">70-80</option>
-                            <option value="80+">80+</option>
-                        </select>
-                    </div>
-
-                    <!-- Prior Conditions -->
-                    <div class="form-group">
-                        <label for="prior_conditions">Prior Medical Conditions</label>
-                        <input type="text" id="prior_conditions" name="prior_conditions" placeholder="e.g., hypertension, diabetes (comma-separated)">
-                    </div>
-
-                    <!-- Appointment Type -->
-                    <div class="form-group">
-                        <label for="appointment_type">Appointment Type</label>
-                        <select id="appointment_type" name="appointment_type" required>
-                            <option value="">Select type...</option>
-                            <option value="Surgery">Surgery</option>
-                            <option value="Consultation">Consultation</option>
-                            <option value="Imaging">Imaging</option>
-                            <option value="Lab Work">Lab Work</option>
-                            <option value="Procedure">Procedure</option>
-                        </select>
-                    </div>
-
-                    <!-- Procedure -->
-                    <div class="form-group">
-                        <label for="procedure">Procedure</label>
-                        <input type="text" id="procedure" name="procedure" required maxlength="200" placeholder="Colonoscopy">
-                    </div>
-
-                    <!-- Clinician -->
-                    <div class="form-group">
-                        <label for="clinician_name">Clinician Name</label>
-                        <input type="text" id="clinician_name" name="clinician_name" required maxlength="100" placeholder="Dr. Sarah Johnson">
-                    </div>
-
-                    <!-- Date & Time -->
-                    <div class="form-group">
-                        <label for="appointment_datetime">Appointment Date & Time</label>
-                        <input type="datetime-local" id="appointment_datetime" name="appointment_datetime" required>
-                    </div>
-
-                    <!-- Channel -->
-                    <div class="form-group">
-                        <label for="channel_preference">Delivery Channel</label>
-                        <select id="channel_preference" name="channel_preference" required>
-                            <option value="">Select channel...</option>
-                            <option value="email">Email</option>
-                            <option value="sms">SMS</option>
-                            <option value="print">Print</option>
-                        </select>
-                    </div>
-
-                    <!-- Submit Button -->
-                    <button type="submit" class="btn-primary" id="generate-btn">
-                        <span id="btn-text">🚀 Generate Prep Plan</span>
-                        <span id="btn-spinner" class="spinner" style="display: none;"></span>
-                    </button>
-
-                    <!-- Sample Cases -->
-                    <div class="sample-section">
-                        <p class="sample-label">Quick Test Cases:</p>
-                        <div class="sample-buttons">
-                            <button type="button" class="btn-sample" data-case-id="0">Chest Pain</button>
-                            <button type="button" class="btn-sample" data-case-id="1">Surgery</button>
-                            <button type="button" class="btn-sample" data-case-id="2">Colonoscopy</button>
-                            <button type="button" class="btn-sample" data-case-id="3">Dizziness</button>
-                            <button type="button" class="btn-sample" data-case-id="4">MRI</button>
-                        </div>
-                    </div>
-                </form>
-            </aside>
-
-            <!-- Center Panel: Dual Output -->
-            <main class="response-panel">
-                <!-- Welcome State -->
-                <div id="welcome-state" class="welcome-state">
-                    <div class="welcome-icon">🏥</div>
-                    <h2>Three-Phase Appointment Prep Agent</h2>
-                    <p>Fill in the patient intake form, and I'll generate:</p>
-                    <ul class="welcome-features">
-                        <li>✓ Phase I: Triage & symptom assessment</li>
-                        <li>✓ Phase II: Admin prep & logistics</li>
-                        <li>✓ Phase III: Clinical briefing for staff</li>
-                    </ul>
-                    <div class="phase-badges">
-                        <span class="badge badge-phase1">Triage & Intake</span>
-                        <span class="badge badge-phase2">Admin Prep</span>
-                        <span class="badge badge-phase3">Clinical Briefing</span>
+            <!-- Top bar -->
+            <header class="topbar">
+                <div class="topbar-left">
+                    <div class="topbar-title" id="topbar-title">Patient Intake</div>
+                    <div class="topbar-breadcrumb">
+                        <span>PrepCare Agent</span>
+                        <span class="breadcrumb-sep">›</span>
+                        <span id="topbar-breadcrumb-sub">Appointment Preparation</span>
                     </div>
                 </div>
-
-                <!-- Error State -->
-                <div id="error-state" class="error-state" style="display: none;">
-                    <div class="error-icon">⚠️</div>
-                    <h3>Processing Issues</h3>
-                    <div id="error-messages" class="error-messages"></div>
+                <div class="topbar-right">
+                    <div class="status-badge" id="llm-status-badge">
+                        <span class="status-dot status-dot--active"></span>
+                        <span>LangGraph Active</span>
+                    </div>
+                    <div class="topbar-badge">3-Phase Agent</div>
+                    <div class="user-avatar">VA</div>
                 </div>
+            </header>
 
-                <!-- Success State: Two-Column Output -->
-                <div id="success-state" class="success-state" style="display: none;">
-                    <div class="output-grid">
-                        <!-- Left: Patient Prep -->
-                        <div class="output-column patient-column">
-                            <div class="column-header patient-header">
-                                <h2>👤 Patient Preparation</h2>
-                                <button id="copy-patient-btn" class="btn-icon" title="Copy patient prep">📋</button>
+            <!-- ──────────────────────────────────────
+                 VIEW: INTAKE (3-column agent workspace)
+            ────────────────────────────────────── -->
+            <div class="view active" id="view-intake">
+                <div class="workspace-grid">
+
+                    <!-- LEFT: Input Form Panel -->
+                    <aside class="panel panel--input" id="panel-input">
+                        <div class="panel-head">
+                            <span class="panel-label">Patient Intake</span>
+                            <div class="panel-head-actions">
+                                <button class="ghost-btn" id="clear-form-btn" title="Clear form">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M3 6h18M19 6l-1 14H6L5 6M10 11v6M14 11v6"/>
+                                        <path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+                                    </svg>
+                                    Clear
+                                </button>
                             </div>
-                            <div id="patient-prep-content" class="output-content"></div>
                         </div>
 
-                        <!-- Right: Clinician Summary -->
-                        <div class="output-column clinician-column">
-                            <div class="column-header clinician-header">
-                                <h2>👨‍⚕️ Clinician Summary</h2>
-                                <button id="copy-clinician-btn" class="btn-icon" title="Copy clinician summary">📋</button>
+                        <form id="agent-form" class="intake-form" autocomplete="off">
+                            <div class="form-section-label">Patient Info</div>
+
+                            <div class="field-row">
+                                <div class="field-group">
+                                    <label class="field-label" for="patient_name">Patient Name</label>
+                                    <input type="text" id="patient_name" name="patient_name" required maxlength="100"
+                                           class="field-input" placeholder="John Smith">
+                                </div>
                             </div>
-                            <div id="clinician-summary-content" class="output-content"></div>
+
+                            <div class="field-row">
+                                <div class="field-group">
+                                    <label class="field-label" for="age_group">Age Group</label>
+                                    <select id="age_group" name="age_group" class="field-select">
+                                        <option value="">Select range...</option>
+                                        <option value="18-30">18–30</option>
+                                        <option value="30-40">30–40</option>
+                                        <option value="40-50">40–50</option>
+                                        <option value="50-60">50–60</option>
+                                        <option value="60-70">60–70</option>
+                                        <option value="70-80">70–80</option>
+                                        <option value="80+">80+</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="form-section-label">Clinical Details</div>
+
+                            <div class="field-row">
+                                <div class="field-group">
+                                    <label class="field-label" for="chief_complaint">Chief Complaint</label>
+                                    <input type="text" id="chief_complaint" name="chief_complaint" required maxlength="200"
+                                           class="field-input" placeholder="e.g., chest feels heavy, dizzy spells">
+                                </div>
+                            </div>
+
+                            <div class="field-row">
+                                <div class="field-group">
+                                    <label class="field-label" for="symptoms_description">Symptom Details</label>
+                                    <textarea id="symptoms_description" name="symptoms_description" rows="2"
+                                              class="field-textarea" placeholder="When did it start? Severity? Triggers?"></textarea>
+                                </div>
+                            </div>
+
+                            <div class="field-row field-row--2col">
+                                <div class="field-group">
+                                    <label class="field-label" for="current_medications">Medications</label>
+                                    <input type="text" id="current_medications" name="current_medications"
+                                           class="field-input" placeholder="lisinopril, atorvastatin...">
+                                </div>
+                                <div class="field-group">
+                                    <label class="field-label" for="allergies">Allergies</label>
+                                    <input type="text" id="allergies" name="allergies"
+                                           class="field-input" placeholder="penicillin, sulfa...">
+                                </div>
+                            </div>
+
+                            <div class="field-row">
+                                <div class="field-group">
+                                    <label class="field-label" for="prior_conditions">Prior Conditions</label>
+                                    <input type="text" id="prior_conditions" name="prior_conditions"
+                                           class="field-input" placeholder="hypertension, diabetes...">
+                                </div>
+                            </div>
+
+                            <div class="form-section-label">Appointment</div>
+
+                            <div class="field-row field-row--2col">
+                                <div class="field-group">
+                                    <label class="field-label" for="appointment_type">Type</label>
+                                    <select id="appointment_type" name="appointment_type" required class="field-select">
+                                        <option value="">Select type...</option>
+                                        <option value="Surgery">Surgery</option>
+                                        <option value="Consultation">Consultation</option>
+                                        <option value="Imaging">Imaging</option>
+                                        <option value="Lab Work">Lab Work</option>
+                                        <option value="Procedure">Procedure</option>
+                                    </select>
+                                </div>
+                                <div class="field-group">
+                                    <label class="field-label" for="channel_preference">Channel</label>
+                                    <select id="channel_preference" name="channel_preference" required class="field-select">
+                                        <option value="">Select...</option>
+                                        <option value="email">Email</option>
+                                        <option value="sms">SMS</option>
+                                        <option value="print">Print</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="field-row">
+                                <div class="field-group">
+                                    <label class="field-label" for="procedure">Procedure</label>
+                                    <input type="text" id="procedure" name="procedure" required maxlength="200"
+                                           class="field-input" placeholder="Colonoscopy">
+                                </div>
+                            </div>
+
+                            <div class="field-row field-row--2col">
+                                <div class="field-group">
+                                    <label class="field-label" for="clinician_name">Clinician</label>
+                                    <input type="text" id="clinician_name" name="clinician_name" required maxlength="100"
+                                           class="field-input" placeholder="Dr. Sarah Johnson">
+                                </div>
+                                <div class="field-group">
+                                    <label class="field-label" for="appointment_datetime">Date & Time</label>
+                                    <input type="datetime-local" id="appointment_datetime" name="appointment_datetime"
+                                           required class="field-input">
+                                </div>
+                            </div>
+
+                            <!-- Generate Button -->
+                            <button type="submit" class="btn-generate" id="generate-btn">
+                                <span id="btn-text">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+                                    </svg>
+                                    Run Agent
+                                </span>
+                                <span id="btn-spinner" class="spinner" style="display:none;"></span>
+                            </button>
+
+                            <!-- Quick Test Cases -->
+                            <div class="quick-cases">
+                                <div class="quick-cases-label">Quick Test</div>
+                                <div class="quick-cases-grid">
+                                    <button type="button" class="case-chip" data-case-id="0">Chest Pain</button>
+                                    <button type="button" class="case-chip" data-case-id="1">Surgery</button>
+                                    <button type="button" class="case-chip" data-case-id="2">Colonoscopy</button>
+                                    <button type="button" class="case-chip" data-case-id="3">Dizziness</button>
+                                    <button type="button" class="case-chip" data-case-id="4">MRI</button>
+                                </div>
+                            </div>
+                        </form>
+                    </aside>
+
+                    <!-- CENTER: Agent Output Panel -->
+                    <main class="panel panel--output" id="panel-output">
+
+                        <!-- Welcome State -->
+                        <div id="welcome-state" class="agent-state agent-state--welcome">
+                            <div class="welcome-glyph">
+                                <svg width="48" height="48" viewBox="0 0 24 24" fill="none">
+                                    <path d="M12 2L2 7L12 12L22 7L12 2Z" fill="#7c6af7" opacity="0.8"/>
+                                    <path d="M2 17L12 22L22 17" stroke="#a78bfa" stroke-width="1.5" fill="none"/>
+                                    <path d="M2 12L12 17L22 12" stroke="#7c6af7" stroke-width="1.5" fill="none"/>
+                                </svg>
+                            </div>
+                            <h2 class="welcome-title">PrepCare Agent Ready</h2>
+                            <p class="welcome-sub">Fill in the patient intake form and the LangGraph agent will orchestrate a three-phase preparation plan.</p>
+                            <div class="welcome-phases">
+                                <div class="phase-card">
+                                    <div class="phase-card-num">01</div>
+                                    <div class="phase-card-name">Triage & Intake</div>
+                                    <div class="phase-card-desc">Symptom assessment & risk stratification</div>
+                                </div>
+                                <div class="phase-card">
+                                    <div class="phase-card-num">02</div>
+                                    <div class="phase-card-name">Admin Prep</div>
+                                    <div class="phase-card-desc">Fasting, transport & logistics planning</div>
+                                </div>
+                                <div class="phase-card">
+                                    <div class="phase-card-num">03</div>
+                                    <div class="phase-card-name">Clinical Briefing</div>
+                                    <div class="phase-card-desc">Structured handoff for clinical staff</div>
+                                </div>
+                            </div>
+                            <div class="welcome-pills">
+                                <span class="pill pill--violet">LangGraph StateGraph</span>
+                                <span class="pill pill--muted">Deterministic Rules</span>
+                                <span class="pill pill--muted">LLM Enhancement</span>
+                                <span class="pill pill--muted">Audit Trail</span>
+                            </div>
+                        </div>
+
+                        <!-- Loading State -->
+                        <div id="loading-state" class="agent-state agent-state--loading" style="display:none;">
+                            <div class="loading-agent">
+                                <div class="loading-pulse"></div>
+                                <div class="loading-nodes">
+                                    <span class="lnode" id="lnode-1">validate_input</span>
+                                    <span class="lnode-arrow">→</span>
+                                    <span class="lnode" id="lnode-2">apply_rules</span>
+                                    <span class="lnode-arrow">→</span>
+                                    <span class="lnode" id="lnode-3">build_plan</span>
+                                    <span class="lnode-arrow">→</span>
+                                    <span class="lnode" id="lnode-4">enhance</span>
+                                    <span class="lnode-arrow">→</span>
+                                    <span class="lnode" id="lnode-5">save</span>
+                                </div>
+                                <p class="loading-text">Agent executing LangGraph pipeline...</p>
+                            </div>
+                        </div>
+
+                        <!-- Error State -->
+                        <div id="error-state" class="agent-state agent-state--error" style="display:none;">
+                            <div class="error-glyph">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10"/>
+                                    <line x1="12" y1="8" x2="12" y2="12"/>
+                                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                                </svg>
+                            </div>
+                            <h3 class="error-title">Validation Failed</h3>
+                            <div id="error-messages" class="error-list"></div>
+                        </div>
+
+                        <!-- Success State -->
+                        <div id="success-state" class="success-output" style="display:none;">
+                            <!-- Output tabs -->
+                            <div class="output-tabs">
+                                <button class="out-tab active" data-out="patient">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/>
+                                        <circle cx="12" cy="7" r="4"/>
+                                    </svg>
+                                    Patient Prep
+                                </button>
+                                <button class="out-tab" data-out="clinician">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M10.5 6H3v12h7.5M14 6h6.5v12H14M12 6v12"/>
+                                    </svg>
+                                    Clinician Brief
+                                </button>
+                                <div class="out-tab-actions">
+                                    <button class="icon-btn" id="copy-current-btn" title="Copy to clipboard">
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <rect x="9" y="9" width="13" height="13" rx="2"/>
+                                            <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+                                        </svg>
+                                    </button>
+                                    <button class="icon-btn" id="print-btn" title="Print">
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6z"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Patient output pane -->
+                            <div class="out-pane active" id="pane-patient">
+                                <div id="patient-prep-content" class="output-body"></div>
+                            </div>
+
+                            <!-- Clinician output pane -->
+                            <div class="out-pane" id="pane-clinician">
+                                <div id="clinician-summary-content" class="output-body output-body--mono"></div>
+                            </div>
+                        </div>
+                    </main>
+
+                    <!-- RIGHT: Agent Reasoning + History -->
+                    <aside class="panel panel--trace" id="panel-trace">
+                        <!-- Agent graph header -->
+                        <div class="panel-head">
+                            <span class="panel-label">Agent Trace</span>
+                            <div class="live-badge" id="trace-live-badge">IDLE</div>
+                        </div>
+
+                        <!-- Node pipeline visualization -->
+                        <div class="agent-pipeline" id="agent-pipeline">
+                            <div class="pipeline-node" id="pnode-validate" data-status="idle">
+                                <div class="pnode-dot"></div>
+                                <div class="pnode-info">
+                                    <div class="pnode-name">validate_input</div>
+                                    <div class="pnode-meta">Awaiting input</div>
+                                </div>
+                            </div>
+                            <div class="pipeline-connector"></div>
+                            <div class="pipeline-node" id="pnode-rules" data-status="idle">
+                                <div class="pnode-dot"></div>
+                                <div class="pnode-info">
+                                    <div class="pnode-name">apply_rules</div>
+                                    <div class="pnode-meta">Deterministic engine</div>
+                                </div>
+                            </div>
+                            <div class="pipeline-connector"></div>
+                            <div class="pipeline-node" id="pnode-plan" data-status="idle">
+                                <div class="pnode-dot"></div>
+                                <div class="pnode-info">
+                                    <div class="pnode-name">build_prep_plan</div>
+                                    <div class="pnode-meta">Structured sections</div>
+                                </div>
+                            </div>
+                            <div class="pipeline-connector"></div>
+                            <div class="pipeline-node" id="pnode-enhance" data-status="idle">
+                                <div class="pnode-dot"></div>
+                                <div class="pnode-info">
+                                    <div class="pnode-name">enhance_message</div>
+                                    <div class="pnode-meta">LLM tone rewrite</div>
+                                </div>
+                            </div>
+                            <div class="pipeline-connector"></div>
+                            <div class="pipeline-node" id="pnode-save" data-status="idle">
+                                <div class="pnode-dot"></div>
+                                <div class="pnode-info">
+                                    <div class="pnode-name">save_output</div>
+                                    <div class="pnode-meta">SQLite persistence</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="trace-divider">
+                            <span>Execution Log</span>
+                        </div>
+
+                        <!-- Reasoning trace log -->
+                        <div class="trace-log" id="reasoning-trace">
+                            <p class="trace-empty">Run the agent to see step-by-step reasoning here.</p>
+                        </div>
+
+                        <div class="trace-divider">
+                            <span>Recent Cases</span>
+                        </div>
+
+                        <!-- History -->
+                        <div class="case-history" id="history-list">
+                            <p class="trace-empty">No cases yet</p>
+                        </div>
+                    </aside>
+
+                </div>
+            </div>
+            <!-- END VIEW: INTAKE -->
+
+            <!-- ──────────────────────────────────────
+                 VIEW: SCHEDULE
+            ────────────────────────────────────── -->
+            <div class="view" id="view-schedule">
+                <div class="content-page">
+                    <div class="page-header">
+                        <h1 class="page-title">Appointment Scheduling</h1>
+                        <p class="page-sub">Find and book available appointment slots using the AI agent.</p>
+                    </div>
+
+                    <div class="schedule-layout">
+                        <div class="panel panel--form">
+                            <div class="panel-head">
+                                <span class="panel-label">Find Slots</span>
+                            </div>
+                            <div class="schedule-form-body">
+                                <div class="field-group">
+                                    <label class="field-label">Appointment Type</label>
+                                    <select id="schedule-type" class="field-select">
+                                        <option value="Surgery">Surgery</option>
+                                        <option value="Consultation">Consultation</option>
+                                        <option value="Imaging">Imaging</option>
+                                        <option value="Lab Work">Lab Work</option>
+                                    </select>
+                                </div>
+                                <button id="get-slots-btn" class="btn-generate" style="margin-top:16px;">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+                                    </svg>
+                                    Find Available Slots
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="panel panel--content" id="slots-panel">
+                            <div class="panel-head">
+                                <span class="panel-label">Available Slots</span>
+                            </div>
+                            <div id="slots-container" class="slots-body">
+                                <p class="trace-empty">Select appointment type and search to view available slots.</p>
+                            </div>
+                            <div id="booking-confirmation" class="booking-success" style="display:none;">
+                                <div class="booking-check">
+                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2">
+                                        <polyline points="20 6 9 17 4 12"/>
+                                    </svg>
+                                </div>
+                                <div>
+                                    <div class="booking-title">Appointment Booked</div>
+                                    <div id="booking-details" class="booking-detail"></div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
-            </main>
-
-            <!-- Right Panel: Reasoning Trace & History -->
-            <aside class="trace-panel">
-                <!-- Reasoning Trace -->
-                <div class="trace-section">
-                    <div class="panel-header">
-                        <h2>🧠 Agent Reasoning</h2>
-                    </div>
-                    <div id="reasoning-trace" class="trace-content">
-                        <p class="trace-empty">Agent reasoning will appear here...</p>
-                    </div>
-                </div>
-
-                <!-- History -->
-                <div class="history-section">
-                    <div class="panel-header">
-                        <h2>📚 Recent Cases</h2>
-                    </div>
-                    <div id="history-list" class="history-content">
-                        <p class="history-empty">No history yet</p>
-                    </div>
-                </div>
-            </aside>
             </div>
-        </div>
-        <!-- End Tab: Appointment Prep -->
 
-        <!-- Tab: Schedule -->
-        <div class="tab-content" id="tab-schedule">
-            <div class="schedule-container">
-                <h2>📅 Schedule Appointment</h2>
-                
-                <div class="schedule-form">
-                    <div class="form-group">
-                        <label>Appointment Type</label>
-                        <select id="schedule-type">
-                            <option value="Surgery">Surgery</option>
-                            <option value="Consultation">Consultation</option>
-                            <option value="Imaging">Imaging</option>
-                        </select>
+            <!-- ──────────────────────────────────────
+                 VIEW: CHAT
+            ────────────────────────────────────── -->
+            <div class="view" id="view-chat">
+                <div class="chat-layout">
+                    <div class="chat-header">
+                        <div class="chat-agent-info">
+                            <div class="chat-agent-avatar">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                                    <path d="M12 2L2 7L12 12L22 7L12 2Z" fill="#9CD5FF"/>
+                                    <path d="M2 12L12 17L22 12" stroke="#9CD5FF" stroke-width="1.5" fill="none"/>
+                                </svg>
+                            </div>
+                            <div>
+                                <div class="chat-agent-name">PrepCare Q&A Agent</div>
+                                <div class="chat-agent-status">
+                                    <span class="status-dot status-dot--active"></span>
+                                    Online — powered by LangGraph
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                    
-                    <button id="get-slots-btn" class="btn-primary">Get Available Slots</button>
-                </div>
 
-                <div id="slots-container" class="slots-container" style="display:none;">
-                    <h3>Available Time Slots</h3>
-                    <div id="slots-list" class="slots-list"></div>
-                </div>
+                    <div id="chat-messages" class="chat-messages">
+                        <div class="chat-message chat-agent">
+                            <div class="msg-avatar msg-avatar--agent">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="#7c6af7">
+                                    <path d="M12 2L2 7L12 12L22 7L12 2Z"/>
+                                </svg>
+                            </div>
+                            <div class="msg-bubble msg-bubble--agent">
+                                Hello! I'm the PrepCare Q&A agent. Ask me anything about your appointment preparation — fasting, medications, what to bring, or what to expect during your procedure.
+                            </div>
+                        </div>
+                    </div>
 
-                <div id="booking-confirmation" class="booking-confirmation" style="display:none;">
-                    <div class="success-icon">✓</div>
-                    <h3>Appointment Booked!</h3>
-                    <p id="booking-details"></p>
+                    <div class="chat-input-bar">
+                        <textarea id="chat-input" class="chat-textarea" placeholder="Ask about fasting, medications, what to expect..." rows="1"></textarea>
+                        <button id="chat-send-btn" class="chat-send-btn">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="22" y1="2" x2="11" y2="13"/>
+                                <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                            </svg>
+                        </button>
+                    </div>
                 </div>
             </div>
-        </div>
 
-        <!-- Tab: Patient Q&A Chat -->
-        <div class="tab-content" id="tab-chat">
-            <div class="chat-container">
-                <h2>💬 Patient Q&A</h2>
-                
-                <div id="chat-messages" class="chat-messages">
-                    <div class="chat-welcome">
-                        <p>Ask me anything about your appointment preparation!</p>
+            <!-- ──────────────────────────────────────
+                 VIEW: RECOVERY
+            ────────────────────────────────────── -->
+            <div class="view" id="view-recovery">
+                <div class="content-page">
+                    <div class="page-header">
+                        <h1 class="page-title">Post-Procedure Recovery</h1>
+                        <p class="page-sub">Generate AI-powered recovery instructions and activity guidelines.</p>
+                    </div>
+
+                    <div class="recovery-layout">
+                        <div class="panel panel--form">
+                            <div class="panel-head">
+                                <span class="panel-label">Procedure</span>
+                            </div>
+                            <div class="schedule-form-body">
+                                <div class="field-group">
+                                    <label class="field-label">Select Procedure</label>
+                                    <select id="recovery-procedure" class="field-select">
+                                        <option value="Surgery">Surgery</option>
+                                        <option value="Colonoscopy">Colonoscopy</option>
+                                        <option value="MRI">MRI</option>
+                                        <option value="Blood Test">Blood Test</option>
+                                    </select>
+                                </div>
+                                <button id="get-recovery-btn" class="btn-generate" style="margin-top:16px;">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                                    </svg>
+                                    Generate Recovery Plan
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="panel panel--content">
+                            <div class="panel-head">
+                                <span class="panel-label">Recovery Instructions</span>
+                            </div>
+                            <div id="recovery-plan" class="recovery-body">
+                                <p class="trace-empty">Select a procedure and generate your recovery plan.</p>
+                            </div>
+                        </div>
                     </div>
                 </div>
-
-                <div class="chat-input-container">
-                    <textarea id="chat-input" placeholder="Type your question..." rows="1"></textarea>
-                    <button id="chat-send-btn" class="btn-primary">Send</button>
-                </div>
             </div>
-        </div>
 
-        <!-- Tab: Post-Procedure Recovery -->
-        <div class="tab-content" id="tab-recovery">
-            <div class="recovery-container">
-                <h2>🏥 Post-Procedure Recovery</h2>
-                
-                <div class="recovery-form">
-                    <div class="form-group">
-                        <label>Procedure</label>
-                        <select id="recovery-procedure">
-                            <option value="Surgery">Surgery</option>
-                            <option value="Colonoscopy">Colonoscopy</option>
-                            <option value="MRI">MRI</option>
-                            <option value="Blood Test">Blood Test</option>
-                        </select>
+            <!-- ──────────────────────────────────────
+                 VIEW: HISTORY
+            ────────────────────────────────────── -->
+            <div class="view" id="view-history">
+                <div class="content-page">
+                    <div class="page-header">
+                        <div>
+                            <h1 class="page-title">Case History</h1>
+                            <p class="page-sub">All previously generated preparation plans and clinical briefings.</p>
+                        </div>
+                        <button class="btn-secondary" id="refresh-history-btn">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="23 4 23 10 17 10"/>
+                                <path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
+                            </svg>
+                            Refresh
+                        </button>
                     </div>
-                    
-                    <button id="get-recovery-btn" class="btn-primary">Get Recovery Plan</button>
-                </div>
 
-                <div id="recovery-plan" class="recovery-plan" style="display:none;"></div>
+                    <div class="panel">
+                        <div class="panel-head">
+                            <span class="panel-label">All Cases</span>
+                            <span class="panel-count" id="history-count">0 records</span>
+                        </div>
+                        <div class="history-table-head">
+                            <span>Patient</span>
+                            <span>Procedure</span>
+                            <span>Type</span>
+                            <span>Generated</span>
+                        </div>
+                        <div id="history-full-list" class="history-table-body">
+                            <p class="trace-empty" style="padding:20px;">No history yet. Generate a prep plan to see records here.</p>
+                        </div>
+                    </div>
+                </div>
             </div>
+
         </div>
+        <!-- END MAIN CONTENT -->
     </div>
-    <!-- End Agent Workspace -->
+    <!-- END APP SHELL -->
 
     <script src="{{ url_for('static', filename='js/agent_workspace.js') }}"></script>
 </body>

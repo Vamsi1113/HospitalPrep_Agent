@@ -42,7 +42,7 @@ class LLMClient:
         models: List of models to try in order (4-tier fallback)
     """
     
-    def __init__(self, api_key: Optional[str] = None, timeout: int = 5, 
+    def __init__(self, api_key: Optional[str] = None, timeout: int = 60,
                  models: Optional[list] = None):
         """
         Initialize LLM client with optional API key.

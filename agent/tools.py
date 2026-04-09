@@ -293,18 +293,22 @@ def admin_prep_tool(state: AgentState, rules_engine, **kwargs) -> AgentState:
             raw.get("appointment_type", ""),
             raw.get("procedure", "")
         )
-        
+
+        # Safe attribute access in case rules is None or unexpected type
+        requires_adult   = getattr(rules, "requires_responsible_adult", False)
+        fasting_required = getattr(rules, "fasting_required", False)
+
         # Build admin prep data
         admin_prep = {
             "insurance_verification_needed": True,
             "copay_reminder": "Please be prepared to pay your copay at check-in",
             "required_documents": _build_document_list(rules, protocols),
             "arrival_instructions": _build_arrival_instructions(rules, raw),
-            "transport_instructions": _build_transport_instructions(rules) if rules.requires_responsible_adult else None,
-            "fasting_instructions": _build_fasting_instructions(rules, raw) if rules.fasting_required else None,
+            "transport_instructions": _build_transport_instructions(rules) if requires_adult else None,
+            "fasting_instructions": _build_fasting_instructions(rules, raw) if fasting_required else None,
             "diet_instructions": _build_diet_instructions(rules, protocols),
             "paperwork_reminders": _build_paperwork_reminders(protocols),
-            "reschedule_warnings": _build_reschedule_warnings(state["triage_data"]),
+            "reschedule_warnings": _build_reschedule_warnings(state.get("triage_data") or {}),
             "patient_readiness_checklist": _build_readiness_checklist(rules, protocols)
         }
         

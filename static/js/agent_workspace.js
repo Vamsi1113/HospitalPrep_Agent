@@ -1,450 +1,631 @@
 /**
- * Three-Phase Agent Workspace JavaScript
- * Handles form submission, dual output rendering, and UI interactions
+ * PrepCare Agent Workspace — JavaScript
+ * Carfract CRM dark UI | LangGraph multi-phase agent interface
  */
 
-// State management
-let currentResult = null;
+'use strict';
 
-// DOM Elements
-const form = document.getElementById('agent-form');
-const generateBtn = document.getElementById('generate-btn');
-const btnText = document.getElementById('btn-text');
-const btnSpinner = document.getElementById('btn-spinner');
+// ═══════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════
+let currentResult    = null;
+let currentOutPane   = 'patient';
+let chatSessionId    = 'session_' + Date.now();
 
-const welcomeState = document.getElementById('welcome-state');
-const errorState = document.getElementById('error-state');
-const successState = document.getElementById('success-state');
+// DOM shortcuts
+const $ = id => document.getElementById(id);
 
-const reasoningTrace = document.getElementById('reasoning-trace');
-const historyList = document.getElementById('history-list');
-
-// Initialize
+// ═══════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
-    setupEventListeners();
-    loadHistory();
+    initNav();
+    initForm();
+    initOutputTabs();
+    initSchedule();
+    initChat();
+    initRecovery();
+    initHistoryView();
+    loadHistory();           // sidebar mini history
+    loadFullHistory();       // history view table
+    setMinDateTime();
 });
 
-/**
- * Setup event listeners
- */
-function setupEventListeners() {
-    // Form submission
-    form.addEventListener('submit', handleFormSubmit);
-    
-    // Sample case buttons
-    document.querySelectorAll('.btn-sample').forEach(btn => {
-        btn.addEventListener('click', handleSampleCaseLoad);
+// ═══════════════════════════════════════════
+// SIDEBAR NAVIGATION
+// ═══════════════════════════════════════════
+const VIEW_META = {
+    intake:   { title: 'Patient Intake',          sub: 'Appointment Preparation' },
+    schedule: { title: 'Appointment Scheduling',  sub: 'Slot Management' },
+    chat:     { title: 'Patient Q&A',             sub: 'AI-Powered Chat' },
+    recovery: { title: 'Post-Procedure Recovery', sub: 'Recovery Planning' },
+    history:  { title: 'Case History',            sub: 'Audit Log' },
+};
+
+function initNav() {
+    document.querySelectorAll('.nav-item').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const view = btn.dataset.view;
+            switchView(view);
+        });
     });
-    
-    // Copy buttons
-    document.getElementById('copy-patient-btn')?.addEventListener('click', () => handleCopy('patient'));
-    document.getElementById('copy-clinician-btn')?.addEventListener('click', () => handleCopy('clinician'));
 }
 
-/**
- * Handle form submission
- */
+function switchView(view) {
+    // Update nav active state
+    document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+    const navBtn = document.querySelector(`.nav-item[data-view="${view}"]`);
+    if (navBtn) navBtn.classList.add('active');
+
+    // Update views
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    const viewEl = $(`view-${view}`);
+    if (viewEl) viewEl.classList.add('active');
+
+    // Update topbar
+    const meta = VIEW_META[view] || {};
+    const topTitle = $('topbar-title');
+    const topSub   = $('topbar-breadcrumb-sub');
+    if (topTitle) topTitle.textContent = meta.title || view;
+    if (topSub)   topSub.textContent   = meta.sub   || '';
+
+    // Refresh on history view
+    if (view === 'history') loadFullHistory();
+}
+
+// ═══════════════════════════════════════════
+// FORM & AGENT EXECUTION
+// ═══════════════════════════════════════════
+function initForm() {
+    const form = $('agent-form');
+    if (!form) return;
+
+    form.addEventListener('submit', handleFormSubmit);
+
+    // Sample cases
+    document.querySelectorAll('.case-chip').forEach(btn => {
+        btn.addEventListener('click', () => loadSampleCase(btn.dataset.caseId));
+    });
+
+    // Copy & print
+    $('copy-current-btn')?.addEventListener('click', handleCopy);
+    $('print-btn')?.addEventListener('click', handlePrint);
+
+    // Clear form
+    $('clear-form-btn')?.addEventListener('click', () => {
+        form.reset();
+        showWelcome();
+    });
+}
+
 async function handleFormSubmit(e) {
     e.preventDefault();
-    
-    // Disable button and show spinner
-    setLoadingState(true);
-    
-    // Hide all states
-    hideAllStates();
-    
-    // Collect form data
-    const formData = new FormData(form);
-    
-    // Parse comma-separated lists
-    const parseCsvList = (value) => {
-        if (!value) return [];
-        return value.split(',').map(item => item.trim()).filter(item => item);
+    setGenerating(true);
+    showLoading();
+    resetPipelineNodes();
+    setBadge('trace-live-badge', 'RUNNING', 'running');
+
+    const formData = new FormData(e.target);
+    const csvList  = v => v ? v.split(',').map(s => s.trim()).filter(Boolean) : [];
+
+    const payload = {
+        patient_name:           formData.get('patient_name'),
+        chief_complaint:        formData.get('chief_complaint'),
+        symptoms_description:   formData.get('symptoms_description') || '',
+        current_medications:    csvList(formData.get('current_medications')),
+        allergies:              csvList(formData.get('allergies')),
+        age_group:              formData.get('age_group') || null,
+        prior_conditions:       csvList(formData.get('prior_conditions')),
+        pregnancy_flag:         false,
+        appointment_type:       formData.get('appointment_type'),
+        procedure:              formData.get('procedure'),
+        clinician_name:         formData.get('clinician_name'),
+        appointment_datetime:   formData.get('appointment_datetime'),
+        channel_preference:     formData.get('channel_preference'),
     };
-    
-    const intakeData = {
-        patient_name: formData.get('patient_name'),
-        chief_complaint: formData.get('chief_complaint'),
-        symptoms_description: formData.get('symptoms_description') || '',
-        current_medications: parseCsvList(formData.get('current_medications')),
-        allergies: parseCsvList(formData.get('allergies')),
-        age_group: formData.get('age_group') || null,
-        prior_conditions: parseCsvList(formData.get('prior_conditions')),
-        pregnancy_flag: false,  // Could add checkbox if needed
-        appointment_type: formData.get('appointment_type'),
-        procedure: formData.get('procedure'),
-        clinician_name: formData.get('clinician_name'),
-        appointment_datetime: formData.get('appointment_datetime'),
-        channel_preference: formData.get('channel_preference')
-    };
-    
+
+    // Animate loading nodes
+    const nodeKeys  = ['lnode-1','lnode-2','lnode-3','lnode-4','lnode-5'];
+    const pipeNodes = ['pnode-validate','pnode-rules','pnode-plan','pnode-enhance','pnode-save'];
+    animateLoadingNodes(nodeKeys, pipeNodes);
+
     try {
-        // Call THREE-PHASE agent API
-        const response = await fetch('/generate', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(intakeData)
+        const res    = await fetch('/generate', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify(payload),
         });
-        
-        const result = await response.json();
-        
+        const result = await res.json();
+
         if (result.error) {
-            // Show errors
-            showErrors(result.messages || ['An error occurred']);
+            showErrors(result.messages || ['An error occurred.']);
+            setBadge('trace-live-badge', 'ERROR', '');
         } else {
-            // Show success with dual outputs
+            currentResult = result;
             showSuccess(result);
-            
-            // Update reasoning trace
-            updateReasoningTrace(result.agent_trace || []);
-            
-            // Reload history
+            insertTraceSteps(result.agent_trace || []);
+            completeAllPipelineNodes(pipeNodes);
+            setBadge('trace-live-badge', 'DONE', 'done');
             loadHistory();
+            loadFullHistory();
         }
-    } catch (error) {
-        console.error('Request failed:', error);
-        showErrors(['Network error. Please check your connection and try again.']);
+    } catch (err) {
+        console.error(err);
+        showErrors(['Network error — please check your connection.']);
+        setBadge('trace-live-badge', 'ERROR', '');
     } finally {
-        setLoadingState(false);
+        setGenerating(false);
+        clearNodeAnimation();
     }
 }
 
-/**
- * Handle sample case loading
- */
-async function handleSampleCaseLoad(e) {
-    const caseId = e.target.dataset.caseId;
-    
+// ═══════════════════════════════════════════
+// SAMPLE CASE LOADER
+// ═══════════════════════════════════════════
+async function loadSampleCase(caseId) {
     try {
-        const response = await fetch(`/load-sample-case/${caseId}`);
-        const caseData = await response.json();
-        
-        if (caseData.error) {
-            alert('Failed to load sample case');
-            return;
-        }
-        
-        // Populate form with case data
-        document.getElementById('patient_name').value = caseData.name || '';
-        document.getElementById('chief_complaint').value = caseData.chief_complaint || '';
-        document.getElementById('symptoms_description').value = caseData.symptoms_description || '';
-        document.getElementById('current_medications').value = caseData.current_medications?.join(', ') || '';
-        document.getElementById('allergies').value = caseData.allergies?.join(', ') || '';
-        document.getElementById('age_group').value = caseData.age_group || '';
-        document.getElementById('prior_conditions').value = caseData.prior_conditions?.join(', ') || '';
-        document.getElementById('appointment_type').value = caseData.appointment_type || '';
-        document.getElementById('procedure').value = caseData.procedure || '';
-        document.getElementById('clinician_name').value = caseData.clinician_name || '';
-        document.getElementById('appointment_datetime').value = caseData.appointment_datetime || '';
-        document.getElementById('channel_preference').value = caseData.channel_preference || '';
-    } catch (error) {
-        console.error('Failed to load sample case:', error);
+        const res  = await fetch(`/load-sample-case/${caseId}`);
+        const data = await res.json();
+        if (data.error) { alert('Failed to load sample case'); return; }
+
+        const set = (id, val) => { const el = $(id); if (el) el.value = val || ''; };
+
+        set('patient_name',           data.name);
+        set('chief_complaint',        data.chief_complaint);
+        set('symptoms_description',   data.symptoms_description);
+        set('current_medications',    (data.current_medications || []).join(', '));
+        set('allergies',              (data.allergies || []).join(', '));
+        set('age_group',              data.age_group);
+        set('prior_conditions',       (data.prior_conditions || []).join(', '));
+        set('appointment_type',       data.appointment_type);
+        set('procedure',              data.procedure);
+        set('clinician_name',         data.clinician_name);
+        set('appointment_datetime',   data.appointment_datetime);
+        set('channel_preference',     data.channel_preference);
+    } catch (err) {
+        console.error(err);
         alert('Failed to load sample case');
     }
 }
 
-/**
- * Show error state
- */
+// ═══════════════════════════════════════════
+// UI STATE TRANSITIONS
+// ═══════════════════════════════════════════
+function showWelcome() {
+    hideAllOutputStates();
+    const ws = $('welcome-state');
+    if (ws) ws.style.display = '';
+}
+
+function showLoading() {
+    hideAllOutputStates();
+    const ls = $('loading-state');
+    if (ls) ls.style.display = '';
+}
+
 function showErrors(messages) {
-    hideAllStates();
-    
-    const errorMessages = document.getElementById('error-messages');
-    errorMessages.innerHTML = '<ul>' + messages.map(msg => `<li>${escapeHtml(msg)}</li>`).join('') + '</ul>';
-    
-    errorState.style.display = 'block';
+    hideAllOutputStates();
+    const es = $('error-state');
+    if (!es) return;
+    const el = $('error-messages');
+    if (el) {
+        el.innerHTML = '<ul>' + messages.map(m => `<li>${escHtml(m)}</li>`).join('') + '</ul>';
+    }
+    es.style.display = '';
 }
 
-/**
- * Show success state with THREE-PHASE outputs
- */
 function showSuccess(result) {
-    hideAllStates();
-    
-    currentResult = result;
-    
-    // Render patient prep (left column)
+    hideAllOutputStates();
+    const ss = $('success-state');
+    if (!ss) return;
+
     renderPatientPrep(result.patient_message);
-    
-    // Render clinician summary (right column)
     renderClinicianSummary(result.clinician_summary);
-    
-    successState.style.display = 'block';
+
+    ss.style.display = '';
+    // Show patient pane by default
+    switchOutPane('patient');
 }
 
-/**
- * Render patient-facing preparation message
- */
-function renderPatientPrep(patientMessage) {
-    const container = document.getElementById('patient-prep-content');
-    
-    if (!patientMessage) {
-        container.innerHTML = '<p class="no-content">No patient prep message available</p>';
-        return;
-    }
-    
-    // Format the message with proper line breaks and structure
-    const formatted = formatText(patientMessage);
-    container.innerHTML = `<div class="patient-message">${formatted}</div>`;
+function hideAllOutputStates() {
+    ['welcome-state','loading-state','error-state','success-state'].forEach(id => {
+        const el = $(id);
+        if (el) el.style.display = 'none';
+    });
 }
 
-/**
- * Render clinician-facing summary
- */
-function renderClinicianSummary(clinicianSummary) {
-    const container = document.getElementById('clinician-summary-content');
-    
-    if (!clinicianSummary) {
-        container.innerHTML = '<p class="no-content">No clinician summary available</p>';
+// ═══════════════════════════════════════════
+// OUTPUT RENDERING
+// ═══════════════════════════════════════════
+function renderPatientPrep(msg) {
+    const container = $('patient-prep-content');
+    if (!container) return;
+
+    if (!msg) {
+        container.innerHTML = '<p class="trace-empty">No patient prep message available.</p>';
         return;
     }
-    
-    // Format as preformatted text to preserve structure
-    container.innerHTML = `<pre class="clinician-summary">${escapeHtml(clinicianSummary)}</pre>`;
+
+    // Parse message into sections
+    const sections = parseMessageSections(msg);
+    container.innerHTML = sections.map(renderSection).join('');
 }
 
-/**
- * Update reasoning trace panel
- */
-function updateReasoningTrace(steps) {
-    if (!steps || steps.length === 0) {
-        reasoningTrace.innerHTML = '<p class="trace-empty">No reasoning trace available</p>';
-        return;
+function parseMessageSections(text) {
+    const lines    = text.split('\n');
+    const sections = [];
+    let current    = null;
+
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) { if (current) current.body += '\n'; continue; }
+
+        // Detect section headers (ALL CAPS followed by colon, or emoji lines)
+        const isHeader = /^[A-Z][A-Z\s&-]{3,}:/.test(trimmed) || /^[📋🍽️💊🎒🕐🚗⚠️🌟✅🏥]+/.test(trimmed);
+
+        if (isHeader) {
+            if (current) sections.push(current);
+            current = { title: trimmed, body: '', type: detectSectionType(trimmed) };
+        } else if (current) {
+            current.body += (current.body ? '\n' : '') + trimmed;
+        } else {
+            current = { title: '', body: trimmed, type: 'default' };
+        }
     }
-    
-    const stepsHtml = steps.map(step => {
-        const phaseClass = step.phase ? `phase-${step.phase}` : '';
-        const phaseLabel = step.phase ? `<span class="phase-badge">Phase ${step.phase}</span>` : '';
-        
-        return `
-            <div class="trace-step ${phaseClass}">
-                ${phaseLabel}
-                <div class="trace-step-title">${escapeHtml(step.step || 'Unknown step')}</div>
-                <div class="trace-step-desc">${escapeHtml(step.description || '')}</div>
-                <div class="trace-step-time">${formatTimestamp(step.timestamp)}</div>
-            </div>
-        `;
+    if (current) sections.push(current);
+    return sections.filter(s => s.body || s.title);
+}
+
+function detectSectionType(title) {
+    const t = title.toUpperCase();
+    if (/WARNING|URGENT|IMPORTANT|⚠️/.test(t))      return 'warning';
+    if (/SUMMARY|APPOINTMENT/.test(t))               return 'info';
+    if (/CLOSING|CONTACT|NOTE|✅/.test(t))           return 'success';
+    return 'default';
+}
+
+function renderSection(sec) {
+    const cls = sec.type !== 'default' ? ` msg-section--${sec.type}` : '';
+    const bodyHtml = formatBodyText(sec.body);
+    return `
+    <div class="msg-section${cls}">
+        ${sec.title ? `<div class="msg-section-title">${escHtml(sec.title)}</div>` : ''}
+        <div class="msg-section-body">${bodyHtml}</div>
+    </div>`;
+}
+
+function formatBodyText(text) {
+    if (!text) return '';
+    return text.split('\n').map(line => {
+        const t = line.trim();
+        if (!t) return '';
+        if (t.startsWith('•') || t.startsWith('-') || t.startsWith('*')) {
+            return `<div style="padding-left:12px; position:relative; margin:2px 0;">
+                <span style="position:absolute;left:0;color:var(--accent)">•</span>
+                ${escHtml(t.replace(/^[•\-\*]\s*/, ''))}
+            </div>`;
+        }
+        if (/⚠️/.test(t)) {
+            return `<div class="warning-line">${escHtml(t)}</div>`;
+        }
+        return `<div style="margin:2px 0;">${escHtml(t)}</div>`;
     }).join('');
-    
-    reasoningTrace.innerHTML = stepsHtml;
 }
 
-/**
- * Load history
- */
-async function loadHistory() {
-    try {
-        const response = await fetch('/history?limit=10');
-        const result = await response.json();
-        
-        if (result.error || !result.history || result.history.length === 0) {
-            historyList.innerHTML = '<p class="history-empty">No history yet</p>';
-            return;
-        }
-        
-        const historyHtml = result.history.map(item => `
-            <div class="history-item" data-id="${item.id}">
-                <div class="history-item-title">${escapeHtml(item.patient_name)} - ${escapeHtml(item.procedure)}</div>
-                <div class="history-item-meta">${formatTimestamp(item.created_at)}</div>
-            </div>
-        `).join('');
-        
-        historyList.innerHTML = historyHtml;
-    } catch (error) {
-        console.error('Failed to load history:', error);
-        historyList.innerHTML = '<p class="history-empty">Failed to load history</p>';
+function renderClinicianSummary(summary) {
+    const container = $('clinician-summary-content');
+    if (!container) return;
+    if (!summary) {
+        container.innerHTML = '<p class="trace-empty">No clinician summary available.</p>';
+        return;
     }
+    container.innerHTML = `<pre style="white-space:pre-wrap;font-size:11.5px;line-height:1.65;color:var(--text-muted);">${escHtml(summary)}</pre>`;
 }
 
-/**
- * Handle copy action
- */
-function handleCopy(type) {
+// ═══════════════════════════════════════════
+// OUTPUT TABS
+// ═══════════════════════════════════════════
+function initOutputTabs() {
+    document.querySelectorAll('.out-tab[data-out]').forEach(btn => {
+        btn.addEventListener('click', () => switchOutPane(btn.dataset.out));
+    });
+}
+
+function switchOutPane(pane) {
+    currentOutPane = pane;
+    document.querySelectorAll('.out-tab[data-out]').forEach(b => {
+        b.classList.toggle('active', b.dataset.out === pane);
+    });
+    document.querySelectorAll('.out-pane').forEach(p => {
+        p.classList.toggle('active', p.id === `pane-${pane}`);
+    });
+}
+
+// ═══════════════════════════════════════════
+// COPY & PRINT
+// ═══════════════════════════════════════════
+function handleCopy() {
     if (!currentResult) return;
-    
-    let text = '';
-    
-    if (type === 'patient') {
-        text = stripHtml(currentResult.patient_message || '');
-    } else if (type === 'clinician') {
-        text = currentResult.clinician_summary || '';
+    const text = currentOutPane === 'patient'
+        ? (currentResult.patient_message || '')
+        : (currentResult.clinician_summary || '');
+
+    if (!text) { alert('Nothing to copy.'); return; }
+
+    navigator.clipboard.writeText(text).then(() => {
+        const btn = $('copy-current-btn');
+        if (!btn) return;
+        const orig = btn.innerHTML;
+        btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>`;
+        setTimeout(() => { btn.innerHTML = orig; }, 2000);
+    }).catch(() => alert('Failed to copy'));
+}
+
+function handlePrint() {
+    if (!currentResult) return;
+    const text = currentOutPane === 'patient'
+        ? (currentResult.patient_message || '')
+        : (currentResult.clinician_summary || '');
+    const win = window.open('', '_blank');
+    win.document.write(`<pre style="font-family:system-ui;white-space:pre-wrap;padding:24px;">${text}</pre>`);
+    win.document.close();
+    win.print();
+}
+
+// ═══════════════════════════════════════════
+// PIPELINE NODE ANIMATION
+// ═══════════════════════════════════════════
+const NODE_TO_STEP = {
+    'pnode-validate': 'validate_input',
+    'pnode-rules':    'apply_rules',
+    'pnode-plan':     'build_prep_plan',
+    'pnode-enhance':  'enhance_message',
+    'pnode-save':     'save_output',
+};
+
+let nodeAnimInterval = null;
+
+function animateLoadingNodes(loadingNodeIds, pipelineNodeIds) {
+    let i = 0;
+    loadingNodeIds.forEach(id => {
+        const el = $(id);
+        if (el) el.className = 'lnode';
+    });
+    pipelineNodeIds.forEach(id => setNodeStatus(id, 'idle'));
+
+    nodeAnimInterval = setInterval(() => {
+        if (i > 0) {
+            const el = $(loadingNodeIds[i - 1]);
+            if (el) el.className = 'lnode done';
+            setNodeStatus(pipelineNodeIds[i - 1], 'done');
+        }
+        if (i < loadingNodeIds.length) {
+            const el = $(loadingNodeIds[i]);
+            if (el) el.className = 'lnode active';
+            setNodeStatus(pipelineNodeIds[i], 'active');
+            i++;
+        } else {
+            clearNodeAnimation();
+        }
+    }, 700);
+}
+
+function clearNodeAnimation() {
+    if (nodeAnimInterval) {
+        clearInterval(nodeAnimInterval);
+        nodeAnimInterval = null;
     }
-    
-    if (!text) {
-        alert('No content to copy');
+}
+
+function resetPipelineNodes() {
+    Object.keys(NODE_TO_STEP).forEach(id => setNodeStatus(id, 'idle'));
+    ['pnode-validate','pnode-rules','pnode-plan','pnode-enhance','pnode-save'].forEach(id => {
+        const node = $(id);
+        if (node) {
+            node.querySelector('.pnode-meta').textContent = META_DEFAULT[id] || '';
+        }
+    });
+}
+
+const META_DEFAULT = {
+    'pnode-validate': 'Awaiting input',
+    'pnode-rules':    'Deterministic engine',
+    'pnode-plan':     'Structured sections',
+    'pnode-enhance':  'LLM tone rewrite',
+    'pnode-save':     'SQLite persistence',
+};
+
+function setNodeStatus(nodeId, status) {
+    const el = $(nodeId);
+    if (el) el.dataset.status = status;
+}
+
+function completeAllPipelineNodes(pipelineNodeIds) {
+    pipelineNodeIds.forEach(id => setNodeStatus(id, 'done'));
+    ['lnode-1','lnode-2','lnode-3','lnode-4','lnode-5'].forEach(id => {
+        const el = $(id);
+        if (el) el.className = 'lnode done';
+    });
+}
+
+// ═══════════════════════════════════════════
+// REASONING TRACE
+// ═══════════════════════════════════════════
+function insertTraceSteps(steps) {
+    const container = $('reasoning-trace');
+    if (!container) return;
+
+    if (!steps || steps.length === 0) {
+        container.innerHTML = '<p class="trace-empty">No trace data returned.</p>';
         return;
     }
-    
-    // Copy to clipboard
-    navigator.clipboard.writeText(text).then(() => {
-        // Show feedback
-        const btn = type === 'patient' ? 
-            document.getElementById('copy-patient-btn') : 
-            document.getElementById('copy-clinician-btn');
-        
-        const originalText = btn.innerHTML;
-        btn.innerHTML = '✓ Copied!';
-        btn.style.background = '#48bb78';
-        
-        setTimeout(() => {
-            btn.innerHTML = originalText;
-            btn.style.background = '';
-        }, 2000);
-    }).catch(err => {
-        console.error('Failed to copy:', err);
-        alert('Failed to copy to clipboard');
-    });
+
+    container.innerHTML = steps.map((step, idx) => {
+        const phaseNum = step.phase || Math.min(Math.floor(idx / 2) + 1, 3);
+        const cls      = `trace-step trace-step--phase${phaseNum}`;
+        const metaTags = buildMetaTags(step);
+
+        return `
+        <div class="${cls}">
+            <div class="trace-step-name">${escHtml(step.step || 'step')}</div>
+            <div class="trace-step-desc">${escHtml(step.description || '')}</div>
+            ${metaTags ? `<div class="trace-step-meta">${metaTags}</div>` : ''}
+            <div class="trace-step-time">${formatTs(step.timestamp)}</div>
+        </div>`;
+    }).join('');
 }
 
-/**
- * Utility: Set loading state
- */
-function setLoadingState(loading) {
-    generateBtn.disabled = loading;
-    btnText.style.display = loading ? 'none' : 'inline';
-    btnSpinner.style.display = loading ? 'inline-block' : 'none';
+function buildMetaTags(step) {
+    const skip = new Set(['step','description','timestamp','phase']);
+    return Object.entries(step)
+        .filter(([k]) => !skip.has(k))
+        .slice(0, 5)
+        .map(([k, v]) => `<span class="trace-meta-tag">${escHtml(k)}: ${escHtml(String(v))}</span>`)
+        .join('');
 }
 
-/**
- * Utility: Hide all states
- */
-function hideAllStates() {
-    welcomeState.style.display = 'none';
-    errorState.style.display = 'none';
-    successState.style.display = 'none';
-}
+// ═══════════════════════════════════════════
+// HISTORY (SIDEBAR MINI)
+// ═══════════════════════════════════════════
+async function loadHistory() {
+    const container = $('history-list');
+    if (!container) return;
 
-/**
- * Utility: Format text (convert newlines to <br>, preserve formatting)
- */
-function formatText(text) {
-    if (!text) return '';
-    
-    // Escape HTML first
-    let formatted = escapeHtml(text);
-    
-    // Convert newlines to <br>
-    formatted = formatted.replace(/\n/g, '<br>');
-    
-    // Make section headers bold (lines ending with :)
-    formatted = formatted.replace(/^([A-Z][A-Z\s]+:)/gm, '<strong>$1</strong>');
-    
-    // Highlight warnings
-    formatted = formatted.replace(/(⚠️[^<]+)/g, '<span class="warning-text">$1</span>');
-    
-    return formatted;
-}
-
-/**
- * Utility: Strip HTML tags
- */
-function stripHtml(html) {
-    const tmp = document.createElement('div');
-    tmp.innerHTML = html;
-    return tmp.textContent || tmp.innerText || '';
-}
-
-/**
- * Utility: Escape HTML
- */
-function escapeHtml(text) {
-    if (!text) return '';
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-/**
- * Utility: Format timestamp
- */
-function formatTimestamp(timestamp) {
-    if (!timestamp) return '';
-    
     try {
-        const date = new Date(timestamp);
-        return date.toLocaleString();
-    } catch (e) {
-        return timestamp;
-    }
-}
+        const res    = await fetch('/history?limit=8');
+        const result = await res.json();
 
-
-// ============================================================================
-// NEW FEATURES: Scheduling, Chat, Post-Procedure
-// ============================================================================
-
-/**
- * Tab Navigation
- */
-document.querySelectorAll('.tab-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-        // Remove active from all tabs
-        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-        
-        // Add active to clicked tab
-        e.target.classList.add('active');
-        const tabId = 'tab-' + e.target.dataset.tab;
-        document.getElementById(tabId).classList.add('active');
-    });
-});
-
-/**
- * Scheduling Feature
- */
-document.getElementById('get-slots-btn')?.addEventListener('click', async () => {
-    const appointmentType = document.getElementById('schedule-type').value;
-    
-    try {
-        const response = await fetch('/api/slots', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ appointment_type: appointmentType })
-        });
-        
-        const result = await response.json();
-        
-        if (result.error) {
-            alert('Failed to get slots: ' + result.messages.join(', '));
+        if (result.error || !result.history || result.history.length === 0) {
+            container.innerHTML = '<p class="trace-empty">No cases yet</p>';
             return;
         }
-        
-        displaySlots(result.slots);
-    } catch (error) {
-        console.error('Get slots error:', error);
-        alert('Failed to get available slots');
-    }
-});
 
-function displaySlots(slots) {
-    const container = document.getElementById('slots-container');
-    const slotsList = document.getElementById('slots-list');
-    
-    if (!slots || slots.length === 0) {
-        slotsList.innerHTML = '<p>No available slots found</p>';
-        container.style.display = 'block';
+        container.innerHTML = result.history.map(item => {
+            const initials = getInitials(item.patient_name);
+            return `
+            <div class="history-row" title="${escHtml(item.patient_name)} — ${escHtml(item.procedure)}">
+                <div class="history-row-avatar">${initials}</div>
+                <div class="history-row-info">
+                    <div class="history-row-name">${escHtml(item.patient_name)}</div>
+                    <div class="history-row-meta">${escHtml(item.procedure || '')} · ${formatTs(item.created_at)}</div>
+                </div>
+            </div>`;
+        }).join('');
+    } catch (err) {
+        console.error(err);
+        container.innerHTML = '<p class="trace-empty">Failed to load</p>';
+    }
+}
+
+// ═══════════════════════════════════════════
+// HISTORY VIEW (full table)
+// ═══════════════════════════════════════════
+function initHistoryView() {
+    $('refresh-history-btn')?.addEventListener('click', loadFullHistory);
+}
+
+async function loadFullHistory() {
+    const container = $('history-full-list');
+    const countEl   = $('history-count');
+    if (!container) return;
+
+    try {
+        const res    = await fetch('/history?limit=50');
+        const result = await res.json();
+
+        if (result.error || !result.history || result.history.length === 0) {
+            container.innerHTML = '<p class="trace-empty" style="padding:20px;">No history yet.</p>';
+            if (countEl) countEl.textContent = '0 records';
+            return;
+        }
+
+        const items = result.history;
+        if (countEl) countEl.textContent = `${items.length} record${items.length !== 1 ? 's' : ''}`;
+
+        container.innerHTML = items.map(item => {
+            const typeClass = getTypeBadgeClass(item.appointment_type);
+            return `
+            <div class="history-table-row">
+                <span>${escHtml(item.patient_name || '—')}</span>
+                <span>${escHtml(item.procedure || '—')}</span>
+                <span><span class="history-badge ${typeClass}">${escHtml(item.appointment_type || '—')}</span></span>
+                <span>${formatTs(item.created_at)}</span>
+            </div>`;
+        }).join('');
+    } catch (err) {
+        console.error(err);
+        container.innerHTML = '<p class="trace-empty" style="padding:20px;">Failed to load history.</p>';
+    }
+}
+
+function getTypeBadgeClass(type) {
+    const map = {
+        'Surgery':     'history-badge--surgery',
+        'Imaging':     'history-badge--imaging',
+        'Lab Work':    'history-badge--lab',
+        'Consultation':'history-badge--consult',
+        'Procedure':   'history-badge--procedure',
+    };
+    return map[type] || 'history-badge--default';
+}
+
+// ═══════════════════════════════════════════
+// SCHEDULING FEATURE
+// ═══════════════════════════════════════════
+function initSchedule() {
+    $('get-slots-btn')?.addEventListener('click', fetchSlots);
+}
+
+async function fetchSlots() {
+    const type      = $('schedule-type')?.value;
+    const container = $('slots-container');
+    if (!container) return;
+
+    container.innerHTML = '<p class="trace-empty" style="padding:12px;">Searching for slots...</p>';
+
+    try {
+        const res    = await fetch('/api/slots', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ appointment_type: type }),
+        });
+        const result = await res.json();
+
+        if (result.error) {
+            container.innerHTML = `<p class="trace-empty" style="color:var(--danger);padding:12px;">Error: ${escHtml((result.messages || []).join(', '))}</p>`;
+            return;
+        }
+
+        renderSlots(result.slots || []);
+    } catch (err) {
+        console.error(err);
+        container.innerHTML = '<p class="trace-empty" style="color:var(--danger);padding:12px;">Failed to fetch slots.</p>';
+    }
+}
+
+function renderSlots(slots) {
+    const container = $('slots-container');
+    if (!container) return;
+
+    if (!slots.length) {
+        container.innerHTML = '<p class="trace-empty" style="padding:12px;">No available slots found.</p>';
         return;
     }
-    
-    slotsList.innerHTML = slots.map(slot => `
-        <div class="slot-card">
-            <div class="slot-time">${escapeHtml(slot.start_formatted)}</div>
-            <div class="slot-doctor">${escapeHtml(slot.doctor)}</div>
-            <div class="slot-location">${escapeHtml(slot.location)}</div>
-            <button class="btn-book" data-slot='${JSON.stringify(slot)}'>Book This Slot</button>
+
+    container.innerHTML = slots.map(slot => `
+    <div class="slot-card">
+        <div>
+            <div class="slot-time">${escHtml(slot.start_formatted)}</div>
+            <div class="slot-doctor">${escHtml(slot.doctor)}</div>
         </div>
-    `).join('');
-    
-    container.style.display = 'block';
-    
-    // Add book button listeners
-    document.querySelectorAll('.btn-book').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            const slot = JSON.parse(e.target.dataset.slot);
-            bookSlot(slot);
+        <div class="slot-location">${escHtml(slot.location)}</div>
+        <button class="btn-book" data-slot='${JSON.stringify(slot).replace(/'/g, '&apos;')}'>Book</button>
+    </div>`).join('');
+
+    container.querySelectorAll('.btn-book').forEach(btn => {
+        btn.addEventListener('click', () => {
+            try { bookSlot(JSON.parse(btn.dataset.slot)); }
+            catch(e) { console.error(e); }
         });
     });
 }
@@ -452,159 +633,225 @@ function displaySlots(slots) {
 async function bookSlot(slot) {
     const patientName = prompt('Enter patient name:');
     if (!patientName) return;
-    
+
     try {
-        const response = await fetch('/api/book', {
-            method: 'POST',
+        const res    = await fetch('/api/book', {
+            method:  'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                slot: slot,
-                patient_name: patientName,
-                appointment_type: document.getElementById('schedule-type').value,
-                procedure: 'General Appointment'
-            })
+            body:    JSON.stringify({
+                slot,
+                patient_name:     patientName,
+                appointment_type: $('schedule-type')?.value || 'Consultation',
+                procedure:        'General Appointment',
+            }),
         });
-        
-        const result = await response.json();
-        
-        if (result.error) {
-            alert('Booking failed: ' + result.messages.join(', '));
-            return;
+        const result = await res.json();
+
+        if (result.error) { alert('Booking failed: ' + (result.messages || []).join(', ')); return; }
+
+        $('slots-container').style.display = 'none';
+        const conf = $('booking-confirmation');
+        if (conf) {
+            $('booking-details').textContent = `Booked for ${patientName} on ${slot.start_formatted}`;
+            conf.style.display = 'flex';
+            setTimeout(() => { conf.style.display = 'none'; $('slots-container').style.display = ''; }, 6000);
         }
-        
-        // Show confirmation
-        document.getElementById('slots-container').style.display = 'none';
-        document.getElementById('booking-details').textContent = 
-            `Appointment booked for ${patientName} on ${slot.start_formatted}`;
-        document.getElementById('booking-confirmation').style.display = 'block';
-        
-        setTimeout(() => {
-            document.getElementById('booking-confirmation').style.display = 'none';
-        }, 5000);
-    } catch (error) {
-        console.error('Booking error:', error);
-        alert('Failed to book appointment');
+    } catch (err) {
+        console.error(err);
+        alert('Failed to book appointment.');
     }
 }
 
-/**
- * Chat Feature
- */
-let chatSessionId = 'session_' + Date.now();
-
-document.getElementById('chat-send-btn')?.addEventListener('click', sendChatMessage);
-document.getElementById('chat-input')?.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') sendChatMessage();
-});
+// ═══════════════════════════════════════════
+// CHAT FEATURE
+// ═══════════════════════════════════════════
+function initChat() {
+    $('chat-send-btn')?.addEventListener('click', sendChatMessage);
+    $('chat-input')?.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
+    });
+}
 
 async function sendChatMessage() {
-    const input = document.getElementById('chat-input');
+    const input    = $('chat-input');
+    if (!input) return;
     const question = input.value.trim();
-    
     if (!question) return;
-    
-    // Add user message to chat
-    addChatMessage('patient', question);
+
+    addChatBubble('patient', question);
     input.value = '';
-    
+
+    // Typing indicator
+    const typingId = addTypingIndicator();
+
     try {
-        const response = await fetch('/api/chat', {
-            method: 'POST',
+        const res    = await fetch('/api/chat', {
+            method:  'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                question: question,
-                session_id: chatSessionId,
+            body:    JSON.stringify({
+                question,
+                session_id:       chatSessionId,
                 appointment_type: 'General',
-                procedure: 'General'
-            })
+                procedure:        'General',
+            }),
         });
-        
-        const result = await response.json();
-        
-        if (result.error) {
-            addChatMessage('agent', 'Sorry, I encountered an error. Please try again.');
-            return;
-        }
-        
-        // Add agent response
-        addChatMessage('agent', result.response);
-    } catch (error) {
-        console.error('Chat error:', error);
-        addChatMessage('agent', 'Sorry, I encountered an error. Please try again.');
+        const result = await res.json();
+        removeTypingIndicator(typingId);
+
+        addChatBubble('agent', result.error ? 'Sorry, I encountered an error. Please try again.' : result.response);
+    } catch (err) {
+        console.error(err);
+        removeTypingIndicator(typingId);
+        addChatBubble('agent', 'Sorry, I encountered a network error. Please try again.');
     }
 }
 
-function addChatMessage(role, content) {
-    const messagesContainer = document.getElementById('chat-messages');
-    
-    // Remove welcome message if present
-    const welcome = messagesContainer.querySelector('.chat-welcome');
-    if (welcome) welcome.remove();
-    
-    const messageDiv = document.createElement('div');
-    messageDiv.className = `chat-message chat-${role}`;
-    messageDiv.innerHTML = `
-        <div class="chat-avatar">${role === 'patient' ? '👤' : '🤖'}</div>
-        <div class="chat-bubble">${escapeHtml(content)}</div>
+function addChatBubble(role, content) {
+    const container = $('chat-messages');
+    if (!container) return;
+
+    const div = document.createElement('div');
+    div.className = `chat-message chat-${role}`;
+
+    const avatarHtml = role === 'agent'
+        ? `<div class="msg-avatar msg-avatar--agent"><svg width="12" height="12" viewBox="0 0 24 24" fill="#7c6af7"><path d="M12 2L2 7L12 12L22 7L12 2Z"/></svg></div>`
+        : `<div class="msg-avatar msg-avatar--patient">👤</div>`;
+
+    div.innerHTML = `
+        ${avatarHtml}
+        <div class="msg-bubble msg-bubble--${role}">${escHtml(content)}</div>
     `;
-    
-    messagesContainer.appendChild(messageDiv);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
 }
 
-/**
- * Post-Procedure Recovery Feature
- */
-document.getElementById('get-recovery-btn')?.addEventListener('click', async () => {
-    const procedure = document.getElementById('recovery-procedure').value;
-    
+function addTypingIndicator() {
+    const container = $('chat-messages');
+    if (!container) return null;
+    const id  = 'typing-' + Date.now();
+    const div = document.createElement('div');
+    div.id        = id;
+    div.className = 'chat-message chat-agent';
+    div.innerHTML = `
+        <div class="msg-avatar msg-avatar--agent"><svg width="12" height="12" viewBox="0 0 24 24" fill="#7c6af7"><path d="M12 2L2 7L12 12L22 7L12 2Z"/></svg></div>
+        <div class="msg-bubble msg-bubble--agent" style="color:var(--text-disabled);">Thinking<span style="animation:fade-in-out 1.2s infinite">...</span></div>`;
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+    return id;
+}
+
+function removeTypingIndicator(id) {
+    if (!id) return;
+    const el = $(id);
+    if (el) el.remove();
+}
+
+// ═══════════════════════════════════════════
+// RECOVERY FEATURE
+// ═══════════════════════════════════════════
+function initRecovery() {
+    $('get-recovery-btn')?.addEventListener('click', fetchRecoveryPlan);
+}
+
+async function fetchRecoveryPlan() {
+    const procedure = $('recovery-procedure')?.value;
+    const container = $('recovery-plan');
+    if (!container) return;
+
+    container.innerHTML = '<p class="trace-empty">Generating recovery plan...</p>';
+
     try {
-        const response = await fetch('/api/post-procedure', {
-            method: 'POST',
+        const res    = await fetch('/api/post-procedure', {
+            method:  'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                procedure: procedure,
-                patient_name: 'Patient'
-            })
+            body:    JSON.stringify({ procedure, patient_name: 'Patient' }),
         });
-        
-        const result = await response.json();
-        
+        const result = await res.json();
+
         if (result.error) {
-            alert('Failed to get recovery plan: ' + result.messages.join(', '));
+            container.innerHTML = `<p class="trace-empty" style="color:var(--danger);">Error: ${escHtml((result.messages || []).join(', '))}</p>`;
             return;
         }
-        
-        displayRecoveryPlan(result.recovery_plan);
-    } catch (error) {
-        console.error('Recovery plan error:', error);
-        alert('Failed to get recovery plan');
-    }
-});
 
-function displayRecoveryPlan(plan) {
-    const container = document.getElementById('recovery-plan');
-    
+        renderRecoveryPlan(result.recovery_plan);
+    } catch (err) {
+        console.error(err);
+        container.innerHTML = '<p class="trace-empty" style="color:var(--danger);">Failed to generate recovery plan.</p>';
+    }
+}
+
+function renderRecoveryPlan(plan) {
+    const container = $('recovery-plan');
+    if (!container || !plan) return;
+
+    const restrictionsHtml = (plan.activity_restrictions?.length)
+        ? `<h4>Activity Restrictions</h4><ul>${plan.activity_restrictions.map(r => `<li>${escHtml(r)}</li>`).join('')}</ul>`
+        : '';
+
+    const warningsHtml = (plan.warning_signs?.length)
+        ? `<h4 class="warning-header">⚠️ Warning Signs — Call Doctor If:</h4>
+           <ul class="warning-list">${plan.warning_signs.map(s => `<li>${escHtml(s)}</li>`).join('')}</ul>`
+        : '';
+
     container.innerHTML = `
-        <div class="recovery-content">
-            <h3>Recovery Instructions</h3>
-            <pre>${escapeHtml(plan.instructions)}</pre>
-            
-            ${plan.activity_restrictions && plan.activity_restrictions.length > 0 ? `
-                <h4>Activity Restrictions</h4>
-                <ul>
-                    ${plan.activity_restrictions.map(r => `<li>${escapeHtml(r)}</li>`).join('')}
-                </ul>
-            ` : ''}
-            
-            ${plan.warning_signs && plan.warning_signs.length > 0 ? `
-                <h4 class="warning-header">⚠️ Warning Signs - Call Doctor If:</h4>
-                <ul class="warning-list">
-                    ${plan.warning_signs.map(s => `<li>${escapeHtml(s)}</li>`).join('')}
-                </ul>
-            ` : ''}
-        </div>
-    `;
-    
-    container.style.display = 'block';
+    <div class="recovery-content">
+        <h3>Recovery Instructions</h3>
+        <pre>${escHtml(plan.instructions || '')}</pre>
+        ${restrictionsHtml}
+        ${warningsHtml}
+    </div>`;
+}
+
+// ═══════════════════════════════════════════
+// BUTTON & BADGE HELPERS
+// ═══════════════════════════════════════════
+function setGenerating(loading) {
+    const btn    = $('generate-btn');
+    const text   = $('btn-text');
+    const spin   = $('btn-spinner');
+    if (!btn) return;
+    btn.disabled          = loading;
+    if (text) text.style.display  = loading ? 'none' : '';
+    if (spin) spin.style.display  = loading ? 'inline-block' : 'none';
+}
+
+function setBadge(id, label, cls) {
+    const el = $(id);
+    if (!el) return;
+    el.textContent = label;
+    el.className   = 'live-badge' + (cls ? ` ${cls}` : '');
+}
+
+// ═══════════════════════════════════════════
+// UTILITIES
+// ═══════════════════════════════════════════
+function escHtml(text) {
+    if (text == null) return '';
+    const d = document.createElement('div');
+    d.textContent = String(text);
+    return d.innerHTML;
+}
+
+function formatTs(ts) {
+    if (!ts) return '';
+    try {
+        return new Date(ts).toLocaleString(undefined, {
+            month: 'short', day: 'numeric',
+            hour: '2-digit', minute: '2-digit',
+        });
+    } catch { return String(ts); }
+}
+
+function getInitials(name) {
+    if (!name) return '?';
+    return name.trim().split(/\s+/).slice(0,2).map(w => w[0]).join('').toUpperCase();
+}
+
+function setMinDateTime() {
+    const dt = $('appointment_datetime');
+    if (!dt) return;
+    const now = new Date();
+    now.setMinutes(now.getMinutes() + 30);
+    dt.min = now.toISOString().slice(0,16);
 }

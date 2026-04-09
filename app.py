@@ -680,5 +680,9 @@ def internal_error(error):
 
 
 if __name__ == '__main__':
-    # Run Flask development server
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    # use_reloader=False  → prevents the Werkzeug reloader from killing
+    #                       in-flight requests when source files change
+    # threaded=True       → each request runs in its own thread so the
+    #                       LLM call doesn't block history/health endpoints
+    app.run(debug=True, host='0.0.0.0', port=5000,
+            use_reloader=False, threaded=True)
