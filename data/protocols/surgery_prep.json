@@ -1,0 +1,47 @@
+{
+  "id": "surgery_prep",
+  "type": "surgery",
+  "procedure": "general surgery",
+  "keywords": ["surgery", "surgical", "operation", "procedure"],
+  "instructions": {
+    "general": [
+      "Bring photo ID and insurance card",
+      "Bring completed pre-operative forms",
+      "Bring list of current medications",
+      "Wear comfortable, loose-fitting clothing"
+    ],
+    "fasting": {
+      "hours": 8,
+      "description": "Do not eat or drink anything (including water) for 8 hours before surgery",
+      "clear_fluids_cutoff": 2,
+      "exceptions": "Take approved medications with small sip of water"
+    },
+    "transport": {
+      "required": true,
+      "description": "You MUST arrange for a responsible adult to drive you home. You cannot drive, take public transit, or use ride-sharing alone.",
+      "escort_must_stay": true
+    },
+    "medications": {
+      "blood_thinners": "Stop 5-7 days before surgery unless instructed otherwise",
+      "diabetes_meds": "Adjust morning dose - your doctor will provide specific instructions",
+      "blood_pressure": "Take with small sip of water on morning of surgery"
+    },
+    "arrival": {
+      "minutes_early": 60,
+      "description": "Arrive 60 minutes before scheduled surgery time for pre-op preparation"
+    },
+    "paperwork": [
+      "Complete health history form",
+      "Sign consent forms",
+      "Provide insurance information",
+      "Complete advance directive if desired"
+    ]
+  },
+  "red_flags": [
+    "Fever over 101°F",
+    "New or worsening symptoms",
+    "Signs of infection",
+    "Inability to stop blood thinners as instructed"
+  ],
+  "source": "clinic_policy_2024"
+}

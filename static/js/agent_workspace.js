@@ -1,10 +1,10 @@
 /**
- * Agent Workspace JavaScript
- * Handles form submission, response rendering, and UI interactions
+ * Three-Phase Agent Workspace JavaScript
+ * Handles form submission, dual output rendering, and UI interactions
  */
 
 // State management
-let currentPrepPlan = null;
+let currentResult = null;
 
 // DOM Elements
 const form = document.getElementById('agent-form');
@@ -32,14 +32,14 @@ function setupEventListeners() {
     // Form submission
     form.addEventListener('submit', handleFormSubmit);
     
-    // Sample buttons
+    // Sample case buttons
     document.querySelectorAll('.btn-sample').forEach(btn => {
-        btn.addEventListener('click', handleSampleLoad);
+        btn.addEventListener('click', handleSampleCaseLoad);
     });
     
-    // Action buttons
-    document.getElementById('copy-btn')?.addEventListener('click', handleCopy);
-    document.getElementById('print-btn')?.addEventListener('click', handlePrint);
+    // Copy buttons
+    document.getElementById('copy-patient-btn')?.addEventListener('click', () => handleCopy('patient'));
+    document.getElementById('copy-clinician-btn')?.addEventListener('click', () => handleCopy('clinician'));
 }
 
 /**
@@ -56,24 +56,37 @@ async function handleFormSubmit(e) {
     
     // Collect form data
     const formData = new FormData(form);
-    const appointmentData = {
+    
+    // Parse comma-separated lists
+    const parseCsvList = (value) => {
+        if (!value) return [];
+        return value.split(',').map(item => item.trim()).filter(item => item);
+    };
+    
+    const intakeData = {
         patient_name: formData.get('patient_name'),
+        chief_complaint: formData.get('chief_complaint'),
+        symptoms_description: formData.get('symptoms_description') || '',
+        current_medications: parseCsvList(formData.get('current_medications')),
+        allergies: parseCsvList(formData.get('allergies')),
+        age_group: formData.get('age_group') || null,
+        prior_conditions: parseCsvList(formData.get('prior_conditions')),
+        pregnancy_flag: false,  // Could add checkbox if needed
         appointment_type: formData.get('appointment_type'),
         procedure: formData.get('procedure'),
         clinician_name: formData.get('clinician_name'),
         appointment_datetime: formData.get('appointment_datetime'),
-        channel_preference: formData.get('channel_preference'),
-        special_notes: formData.get('special_notes') || ''
+        channel_preference: formData.get('channel_preference')
     };
     
     try {
-        // Call agent API
+        // Call THREE-PHASE agent API
         const response = await fetch('/generate', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify(appointmentData)
+            body: JSON.stringify(intakeData)
         });
         
         const result = await response.json();
@@ -82,7 +95,7 @@ async function handleFormSubmit(e) {
             // Show errors
             showErrors(result.messages || ['An error occurred']);
         } else {
-            // Show success
+            // Show success with dual outputs
             showSuccess(result);
             
             // Update reasoning trace
@@ -100,31 +113,36 @@ async function handleFormSubmit(e) {
 }
 
 /**
- * Handle sample data loading
+ * Handle sample case loading
  */
-async function handleSampleLoad(e) {
-    const sampleId = e.target.dataset.sampleId;
+async function handleSampleCaseLoad(e) {
+    const caseId = e.target.dataset.caseId;
     
     try {
-        const response = await fetch(`/load-sample/${sampleId}`);
-        const sampleData = await response.json();
+        const response = await fetch(`/load-sample-case/${caseId}`);
+        const caseData = await response.json();
         
-        if (sampleData.error) {
-            alert('Failed to load sample data');
+        if (caseData.error) {
+            alert('Failed to load sample case');
             return;
         }
         
-        // Populate form
-        document.getElementById('patient_name').value = sampleData.patient_name || '';
-        document.getElementById('appointment_type').value = sampleData.appointment_type || '';
-        document.getElementById('procedure').value = sampleData.procedure || '';
-        document.getElementById('clinician_name').value = sampleData.clinician_name || '';
-        document.getElementById('appointment_datetime').value = sampleData.appointment_datetime || '';
-        document.getElementById('channel_preference').value = sampleData.channel_preference || '';
-        document.getElementById('special_notes').value = sampleData.special_notes || '';
+        // Populate form with case data
+        document.getElementById('patient_name').value = caseData.name || '';
+        document.getElementById('chief_complaint').value = caseData.chief_complaint || '';
+        document.getElementById('symptoms_description').value = caseData.symptoms_description || '';
+        document.getElementById('current_medications').value = caseData.current_medications?.join(', ') || '';
+        document.getElementById('allergies').value = caseData.allergies?.join(', ') || '';
+        document.getElementById('age_group').value = caseData.age_group || '';
+        document.getElementById('prior_conditions').value = caseData.prior_conditions?.join(', ') || '';
+        document.getElementById('appointment_type').value = caseData.appointment_type || '';
+        document.getElementById('procedure').value = caseData.procedure || '';
+        document.getElementById('clinician_name').value = caseData.clinician_name || '';
+        document.getElementById('appointment_datetime').value = caseData.appointment_datetime || '';
+        document.getElementById('channel_preference').value = caseData.channel_preference || '';
     } catch (error) {
-        console.error('Failed to load sample:', error);
-        alert('Failed to load sample data');
+        console.error('Failed to load sample case:', error);
+        alert('Failed to load sample case');
     }
 }
 
@@ -141,93 +159,51 @@ function showErrors(messages) {
 }
 
 /**
- * Show success state with prep plan
+ * Show success state with THREE-PHASE outputs
  */
 function showSuccess(result) {
     hideAllStates();
     
-    currentPrepPlan = result;
+    currentResult = result;
     
-    // For now, render the full_message as a single block
-    // TODO: Render structured sections when prep_plan_builder is implemented
-    if (result.prep_sections) {
-        renderStructuredSections(result.prep_sections);
-    } else {
-        // Fallback: render full_message
-        renderFallbackMessage(result.full_message);
-    }
+    // Render patient prep (left column)
+    renderPatientPrep(result.patient_message);
+    
+    // Render clinician summary (right column)
+    renderClinicianSummary(result.clinician_summary);
     
     successState.style.display = 'block';
 }
 
 /**
- * Render structured prep sections
+ * Render patient-facing preparation message
  */
-function renderStructuredSections(sections) {
-    // Appointment Summary
-    document.getElementById('appointment-summary').innerHTML = formatText(sections.appointment_summary);
+function renderPatientPrep(patientMessage) {
+    const container = document.getElementById('patient-prep-content');
     
-    // Fasting Plan
-    if (sections.fasting_plan) {
-        document.getElementById('fasting-plan').innerHTML = formatText(sections.fasting_plan);
-        document.getElementById('fasting-section').style.display = 'block';
-    } else {
-        document.getElementById('fasting-section').style.display = 'none';
+    if (!patientMessage) {
+        container.innerHTML = '<p class="no-content">No patient prep message available</p>';
+        return;
     }
     
-    // Diet Guidance
-    if (sections.diet_guidance) {
-        document.getElementById('diet-guidance').innerHTML = formatText(sections.diet_guidance);
-        document.getElementById('diet-section').style.display = 'block';
-    } else {
-        document.getElementById('diet-section').style.display = 'none';
-    }
-    
-    // Medication Instructions
-    document.getElementById('medication-instructions').innerHTML = formatText(sections.medication_instructions);
-    
-    // Items to Bring
-    const itemsList = sections.items_to_bring.map(item => `<li>${escapeHtml(item)}</li>`).join('');
-    document.getElementById('items-to-bring').innerHTML = `<ul>${itemsList}</ul>`;
-    
-    // Arrival Instructions
-    document.getElementById('arrival-instructions').innerHTML = formatText(sections.arrival_instructions);
-    
-    // Transport Instructions
-    if (sections.transport_instructions) {
-        document.getElementById('transport-instructions').innerHTML = formatText(sections.transport_instructions);
-        document.getElementById('transport-section').style.display = 'block';
-    } else {
-        document.getElementById('transport-section').style.display = 'none';
-    }
-    
-    // Red Flag Warnings
-    const warningsList = sections.red_flag_warnings.map(warning => `<li>${escapeHtml(warning)}</li>`).join('');
-    document.getElementById('red-flag-warnings').innerHTML = `<ul>${warningsList}</ul>`;
-    
-    // Closing Note
-    document.getElementById('closing-note').innerHTML = formatText(sections.closing_note);
+    // Format the message with proper line breaks and structure
+    const formatted = formatText(patientMessage);
+    container.innerHTML = `<div class="patient-message">${formatted}</div>`;
 }
 
 /**
- * Render fallback message (when structured sections not available)
+ * Render clinician-facing summary
  */
-function renderFallbackMessage(message) {
-    // Parse the message and try to extract sections
-    // For now, just show in appointment summary
-    document.getElementById('appointment-summary').innerHTML = formatText(message);
+function renderClinicianSummary(clinicianSummary) {
+    const container = document.getElementById('clinician-summary-content');
     
-    // Hide optional sections
-    document.getElementById('fasting-section').style.display = 'none';
-    document.getElementById('diet-section').style.display = 'none';
-    document.getElementById('transport-section').style.display = 'none';
+    if (!clinicianSummary) {
+        container.innerHTML = '<p class="no-content">No clinician summary available</p>';
+        return;
+    }
     
-    // Show generic content in other sections
-    document.getElementById('medication-instructions').innerHTML = '<p>Follow your regular medication schedule unless instructed otherwise by your clinician.</p>';
-    document.getElementById('items-to-bring').innerHTML = '<ul><li>Photo ID</li><li>Insurance Card</li><li>List of current medications</li></ul>';
-    document.getElementById('arrival-instructions').innerHTML = '<p>Please arrive 15 minutes before your scheduled appointment time.</p>';
-    document.getElementById('red-flag-warnings').innerHTML = '<ul><li>Severe pain or discomfort</li><li>High fever (>101°F)</li><li>Difficulty breathing</li><li>Unusual symptoms</li></ul>';
-    document.getElementById('closing-note').innerHTML = '<p>If you have any questions or concerns, please contact the clinic. We look forward to seeing you!</p>';
+    // Format as preformatted text to preserve structure
+    container.innerHTML = `<pre class="clinician-summary">${escapeHtml(clinicianSummary)}</pre>`;
 }
 
 /**
@@ -239,13 +215,19 @@ function updateReasoningTrace(steps) {
         return;
     }
     
-    const stepsHtml = steps.map(step => `
-        <div class="trace-step">
-            <div class="trace-step-title">${escapeHtml(step.step || 'Unknown step')}</div>
-            <div class="trace-step-desc">${escapeHtml(step.description || '')}</div>
-            <div class="trace-step-time">${formatTimestamp(step.timestamp)}</div>
-        </div>
-    `).join('');
+    const stepsHtml = steps.map(step => {
+        const phaseClass = step.phase ? `phase-${step.phase}` : '';
+        const phaseLabel = step.phase ? `<span class="phase-badge">Phase ${step.phase}</span>` : '';
+        
+        return `
+            <div class="trace-step ${phaseClass}">
+                ${phaseLabel}
+                <div class="trace-step-title">${escapeHtml(step.step || 'Unknown step')}</div>
+                <div class="trace-step-desc">${escapeHtml(step.description || '')}</div>
+                <div class="trace-step-time">${formatTimestamp(step.timestamp)}</div>
+            </div>
+        `;
+    }).join('');
     
     reasoningTrace.innerHTML = stepsHtml;
 }
@@ -280,64 +262,41 @@ async function loadHistory() {
 /**
  * Handle copy action
  */
-function handleCopy() {
-    if (!currentPrepPlan) return;
+function handleCopy(type) {
+    if (!currentResult) return;
     
-    // Create text version of prep plan
-    const text = createTextVersion(currentPrepPlan);
+    let text = '';
+    
+    if (type === 'patient') {
+        text = stripHtml(currentResult.patient_message || '');
+    } else if (type === 'clinician') {
+        text = currentResult.clinician_summary || '';
+    }
+    
+    if (!text) {
+        alert('No content to copy');
+        return;
+    }
     
     // Copy to clipboard
     navigator.clipboard.writeText(text).then(() => {
-        alert('Prep plan copied to clipboard!');
+        // Show feedback
+        const btn = type === 'patient' ? 
+            document.getElementById('copy-patient-btn') : 
+            document.getElementById('copy-clinician-btn');
+        
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '✓ Copied!';
+        btn.style.background = '#48bb78';
+        
+        setTimeout(() => {
+            btn.innerHTML = originalText;
+            btn.style.background = '';
+        }, 2000);
     }).catch(err => {
         console.error('Failed to copy:', err);
         alert('Failed to copy to clipboard');
     });
-}
-
-/**
- * Handle print action
- */
-function handlePrint() {
-    window.print();
-}
-
-/**
- * Create text version of prep plan
- */
-function createTextVersion(result) {
-    if (result.prep_sections) {
-        const sections = result.prep_sections;
-        let text = '=== APPOINTMENT PREPARATION PLAN ===\n\n';
-        
-        text += 'APPOINTMENT SUMMARY\n' + stripHtml(sections.appointment_summary) + '\n\n';
-        
-        if (sections.fasting_plan) {
-            text += 'FASTING INSTRUCTIONS\n' + stripHtml(sections.fasting_plan) + '\n\n';
-        }
-        
-        if (sections.diet_guidance) {
-            text += 'DIET GUIDANCE\n' + stripHtml(sections.diet_guidance) + '\n\n';
-        }
-        
-        text += 'MEDICATION INSTRUCTIONS\n' + stripHtml(sections.medication_instructions) + '\n\n';
-        
-        text += 'WHAT TO BRING\n' + sections.items_to_bring.map(item => '• ' + item).join('\n') + '\n\n';
-        
-        text += 'ARRIVAL INSTRUCTIONS\n' + stripHtml(sections.arrival_instructions) + '\n\n';
-        
-        if (sections.transport_instructions) {
-            text += 'TRANSPORTATION REQUIREMENTS\n' + stripHtml(sections.transport_instructions) + '\n\n';
-        }
-        
-        text += 'WHEN TO CALL THE CLINIC\n' + sections.red_flag_warnings.map(w => '• ' + w).join('\n') + '\n\n';
-        
-        text += stripHtml(sections.closing_note);
-        
-        return text;
-    } else {
-        return stripHtml(result.full_message);
-    }
 }
 
 /**
@@ -363,7 +322,20 @@ function hideAllStates() {
  */
 function formatText(text) {
     if (!text) return '';
-    return escapeHtml(text).replace(/\n/g, '<br>');
+    
+    // Escape HTML first
+    let formatted = escapeHtml(text);
+    
+    // Convert newlines to <br>
+    formatted = formatted.replace(/\n/g, '<br>');
+    
+    // Make section headers bold (lines ending with :)
+    formatted = formatted.replace(/^([A-Z][A-Z\s]+:)/gm, '<strong>$1</strong>');
+    
+    // Highlight warnings
+    formatted = formatted.replace(/(⚠️[^<]+)/g, '<span class="warning-text">$1</span>');
+    
+    return formatted;
 }
 
 /**
@@ -379,6 +351,7 @@ function stripHtml(html) {
  * Utility: Escape HTML
  */
 function escapeHtml(text) {
+    if (!text) return '';
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;

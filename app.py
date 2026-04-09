@@ -21,6 +21,7 @@ from services.message_builder import MessageBuilder
 from services.llm_client import LLMClient
 from services.storage import StorageService
 from services.prep_plan_builder import PrepPlanBuilder
+from services.retrieval import ProtocolRetrieval
 from agent.graph import run_agent
 
 # Load environment variables from .env file
@@ -38,9 +39,10 @@ rules_engine = RulesEngine()
 llm_client = LLMClient(api_key=app.config['OPENAI_API_KEY'])
 message_builder = MessageBuilder(llm_client)
 prep_plan_builder = PrepPlanBuilder()
+retrieval_service = ProtocolRetrieval(protocols_dir="data/protocols")
 storage = StorageService()
 
-# Initialize database on startup (Requirement 8.10)
+# Initialize database on startup
 storage.init_db()
 
 # Load design tokens and page content
@@ -65,53 +67,62 @@ def index():
 @app.route('/generate', methods=['POST'])
 def generate_prep_message():
     """
-    Generate appointment prep instructions via AJAX.
+    Generate THREE-PHASE appointment prep via AJAX.
     
-    Expects JSON request body with appointment data.
-    Returns JSON with preview, full_message, rules_explanation, message_id, llm_used.
+    Expects JSON request body with:
+    - chief_complaint: Patient's symptom description
+    - symptoms_description: Detailed symptom info
+    - current_medications: List of medications
+    - allergies: List of allergies
+    - age_group: Patient age range
+    - prior_conditions: List of conditions
+    - appointment_type: Type of appointment
+    - procedure: Specific procedure
+    - clinician_name: Doctor name
+    - appointment_datetime: Appointment date/time
+    - ehr_context: Optional EHR data
     
-    Validates: Requirements 6.3, 6.4, 6.5, 8.1, 8.2, 8.4, 8.5, 8.6, 8.8, 8.9
+    Returns JSON with:
+    - patient_message: Patient-facing prep instructions
+    - clinician_summary: Clinician-facing summary
+    - agent_trace: Reasoning steps
     """
     try:
         # Parse request data
-        appointment_data = request.get_json()
+        raw_intake = request.get_json()
         
-        if not appointment_data:
-            app.logger.warning("Generate endpoint called with no appointment data")
+        if not raw_intake:
+            app.logger.warning("Generate endpoint called with no data")
             return jsonify({
                 "error": True,
-                "messages": ["No appointment data provided"]
+                "messages": ["No intake data provided"]
             }), 400
         
-        # Generate message using LangGraph agent
+        # Generate THREE-PHASE prep using LangGraph agent
         result = run_agent(
-            appointment_data,
+            raw_intake,
             rules_engine,
-            prep_plan_builder,
-            message_builder,
+            retrieval_service,
             llm_client,
             storage
         )
         
-        # Check for validation errors (Requirement 6.4, 8.1, 8.2)
+        # Check for errors
         if result.get("error"):
-            app.logger.info(f"Validation errors: {result.get('messages')}")
+            app.logger.info(f"Agent errors: {result.get('messages')}")
             return jsonify(result), 400
         
-        # Return success (Requirement 6.3)
+        # Return success with both patient and clinician outputs
         return jsonify(result), 200
         
     except ValueError as e:
-        # Validation error handling (Requirement 8.1, 8.2)
-        app.logger.warning(f"Validation error in generate endpoint: {str(e)}")
+        app.logger.warning(f"Validation error: {str(e)}")
         return jsonify({
             "error": True,
             "messages": [str(e)]
         }), 400
     except Exception as e:
-        # Server error handling (Requirement 6.5, 8.5, 8.6)
-        # Log error without exposing PII (Requirement 8.4)
-        app.logger.error(f"Server error in generate endpoint: {type(e).__name__}: {str(e)}")
+        app.logger.error(f"Server error: {type(e).__name__}: {str(e)}")
         return jsonify({
             "error": True,
             "messages": ["An unexpected error occurred. Please try again."]
@@ -218,6 +229,61 @@ def load_sample(sample_id: int):
         return jsonify({
             "error": True,
             "messages": ["Failed to load sample. Please try again."]
+        }), 500
+
+
+@app.route('/load-sample-case/<int:case_id>')
+def load_sample_case(case_id: int):
+    """
+    Load a specific sample case with symptoms and EHR context.
+    
+    Args:
+        case_id: The ID of the case to load
+    
+    Returns:
+        JSON with sample case data or 404 if not found
+    """
+    try:
+        # Validate case_id range
+        if case_id < 0:
+            app.logger.warning(f"Invalid case_id requested: {case_id}")
+            return jsonify({
+                "error": True,
+                "messages": ["Invalid case ID"]
+            }), 400
+        
+        # Load sample cases from JSON file
+        with open('data/sample_cases.json', 'r') as f:
+            cases = json.load(f)
+        
+        # Find case by ID
+        if 0 <= case_id < len(cases):
+            return jsonify(cases[case_id]), 200
+        else:
+            # Case not found
+            app.logger.info(f"Case not found: {case_id}")
+            return jsonify({
+                "error": True,
+                "messages": ["Case not found"]
+            }), 404
+            
+    except FileNotFoundError:
+        app.logger.warning("Sample cases file not found")
+        return jsonify({
+            "error": True,
+            "messages": ["No sample cases available"]
+        }), 404
+    except json.JSONDecodeError as e:
+        app.logger.error(f"Failed to parse sample cases: {type(e).__name__}")
+        return jsonify({
+            "error": True,
+            "messages": ["Sample cases data is corrupted"]
+        }), 500
+    except Exception as e:
+        app.logger.error(f"Server error in load_sample_case endpoint: {type(e).__name__}")
+        return jsonify({
+            "error": True,
+            "messages": ["Failed to load sample case. Please try again."]
         }), 500
 
 

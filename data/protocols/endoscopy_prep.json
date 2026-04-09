@@ -1,0 +1,53 @@
+{
+  "id": "endoscopy_prep",
+  "type": "procedure",
+  "procedure": "endoscopy",
+  "keywords": ["endoscopy", "colonoscopy", "scope", "bowel prep"],
+  "instructions": {
+    "general": [
+      "Bring photo ID and insurance card",
+      "Bring bowel prep kit instructions",
+      "Wear comfortable clothing"
+    ],
+    "fasting": {
+      "hours": 12,
+      "description": "Complete bowel prep as instructed. No solid food for 24 hours before procedure.",
+      "clear_fluids_cutoff": 2,
+      "diet_restrictions": {
+        "3_days_before": "Avoid seeds, nuts, popcorn, raw vegetables",
+        "1_day_before": "Clear liquids only - no red or purple liquids"
+      }
+    },
+    "transport": {
+      "required": true,
+      "description": "You MUST have someone drive you home due to sedation",
+      "escort_must_stay": true
+    },
+    "medications": {
+      "blood_thinners": "Discuss with doctor - may need to stop temporarily",
+      "diabetes_meds": "Hold morning dose",
+      "iron_supplements": "Stop 5 days before procedure"
+    },
+    "arrival": {
+      "minutes_early": 30,
+      "description": "Arrive 30 minutes early for check-in and IV placement"
+    },
+    "paperwork": [
+      "Complete procedure consent form",
+      "Provide medication list",
+      "Confirm bowel prep completion"
+    ],
+    "bowel_prep": {
+      "instructions": "Follow prep kit instructions exactly",
+      "stay_near_bathroom": true,
+      "hydration": "Drink plenty of clear fluids during prep"
+    }
+  },
+  "red_flags": [
+    "Severe abdominal pain",
+    "Vomiting blood",
+    "Unable to complete bowel prep",
+    "Signs of dehydration"
+  ],
+  "source": "gastroenterology_protocol_2024"
+}

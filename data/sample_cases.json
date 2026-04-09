@@ -1,0 +1,119 @@
+[
+  {
+    "id": 0,
+    "name": "Chest Pain Case",
+    "chief_complaint": "chest feels heavy and tight",
+    "symptoms_description": "Started yesterday, feels like pressure, worse with activity",
+    "age_group": "55-65",
+    "current_medications": ["lisinopril", "atorvastatin"],
+    "allergies": ["penicillin"],
+    "prior_conditions": ["hypertension", "high cholesterol"],
+    "appointment_type": "Consultation",
+    "procedure": "Cardiac evaluation",
+    "clinician_name": "Dr. Sarah Johnson",
+    "appointment_datetime": "2026-04-15T10:00",
+    "channel_preference": "email",
+    "ehr_context": {
+      "last_visit": "2025-12-10",
+      "recent_labs": {
+        "cholesterol": "elevated",
+        "blood_pressure": "140/90"
+      },
+      "medications_on_file": ["lisinopril 10mg daily", "atorvastatin 20mg daily"],
+      "allergies_on_file": ["penicillin - rash"]
+    }
+  },
+  {
+    "id": 1,
+    "name": "Pre-Op Surgery Case",
+    "chief_complaint": "scheduled for gallbladder surgery",
+    "symptoms_description": "recurring abdominal pain, diagnosed with gallstones",
+    "age_group": "40-50",
+    "current_medications": ["omeprazole"],
+    "allergies": [],
+    "prior_conditions": ["GERD"],
+    "appointment_type": "Surgery",
+    "procedure": "Laparoscopic cholecystectomy",
+    "clinician_name": "Dr. Michael Chen",
+    "appointment_datetime": "2026-04-20T07:00",
+    "channel_preference": "print",
+    "ehr_context": {
+      "last_visit": "2026-03-25",
+      "recent_labs": {
+        "complete_blood_count": "normal",
+        "liver_function": "normal"
+      },
+      "imaging": "Ultrasound confirmed gallstones",
+      "pre_op_clearance": "pending"
+    }
+  },
+  {
+    "id": 2,
+    "name": "Colonoscopy Screening",
+    "chief_complaint": "routine colonoscopy screening",
+    "symptoms_description": "no symptoms, preventive screening",
+    "age_group": "50-60",
+    "current_medications": ["metformin", "aspirin"],
+    "allergies": [],
+    "prior_conditions": ["type 2 diabetes"],
+    "appointment_type": "Procedure",
+    "procedure": "Colonoscopy",
+    "clinician_name": "Dr. Lisa Martinez",
+    "appointment_datetime": "2026-04-18T08:30",
+    "channel_preference": "email",
+    "ehr_context": {
+      "last_visit": "2026-01-15",
+      "recent_labs": {
+        "A1C": "6.8%",
+        "glucose": "controlled"
+      },
+      "family_history": "colon cancer in father"
+    }
+  },
+  {
+    "id": 3,
+    "name": "Dizzy Spells",
+    "chief_complaint": "feeling dizzy and lightheaded",
+    "symptoms_description": "started 3 days ago, happens when standing up, no spinning sensation",
+    "age_group": "70-80",
+    "current_medications": ["amlodipine", "furosemide", "warfarin"],
+    "allergies": ["sulfa drugs"],
+    "prior_conditions": ["atrial fibrillation", "hypertension"],
+    "appointment_type": "Consultation",
+    "procedure": "Cardiology follow-up",
+    "clinician_name": "Dr. Robert Williams",
+    "appointment_datetime": "2026-04-12T14:00",
+    "channel_preference": "print",
+    "ehr_context": {
+      "last_visit": "2026-02-20",
+      "recent_labs": {
+        "INR": "2.8",
+        "potassium": "3.2 (low)"
+      },
+      "medications_on_file": ["amlodipine 5mg", "furosemide 40mg", "warfarin 5mg"],
+      "recent_changes": "Furosemide dose increased last month"
+    }
+  },
+  {
+    "id": 4,
+    "name": "MRI with Contrast",
+    "chief_complaint": "scheduled for brain MRI",
+    "symptoms_description": "persistent headaches, neurologist ordered MRI",
+    "age_group": "30-40",
+    "current_medications": ["sumatriptan as needed"],
+    "allergies": [],
+    "prior_conditions": ["migraines"],
+    "appointment_type": "Imaging",
+    "procedure": "Brain MRI with contrast",
+    "clinician_name": "Radiology Department",
+    "appointment_datetime": "2026-04-16T11:00",
+    "channel_preference": "email",
+    "ehr_context": {
+      "last_visit": "2026-03-10",
+      "recent_labs": {
+        "kidney_function": "normal"
+      },
+      "prior_imaging": "CT scan 2025 - normal"
+    }
+  }
+]

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Appointment Prep AI Agent</title>
+    <title>Three-Phase Appointment Prep AI Agent</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/agent_workspace.css') }}">
 </head>
 <body>
@@ -11,8 +11,8 @@
         <!-- Header -->
         <header class="workspace-header">
             <div class="header-content">
-                <h1 class="agent-title">🤖 Appointment Prep AI Agent</h1>
-                <p class="agent-subtitle">Intelligent Pre-Consultation Preparation Assistant</p>
+                <h1 class="agent-title">🏥 Three-Phase Appointment Prep Agent</h1>
+                <p class="agent-subtitle">Triage • Admin Prep • Clinical Briefing</p>
             </div>
         </header>
 
@@ -21,7 +21,7 @@
             <!-- Left Panel: Input Form -->
             <aside class="input-panel">
                 <div class="panel-header">
-                    <h2>📋 Appointment Details</h2>
+                    <h2>📋 Patient Intake</h2>
                 </div>
                 
                 <form id="agent-form" class="agent-form">
@@ -29,6 +29,51 @@
                     <div class="form-group">
                         <label for="patient_name">Patient Name</label>
                         <input type="text" id="patient_name" name="patient_name" required maxlength="100" placeholder="John Smith">
+                    </div>
+
+                    <!-- Chief Complaint -->
+                    <div class="form-group">
+                        <label for="chief_complaint">Chief Complaint / Symptoms</label>
+                        <input type="text" id="chief_complaint" name="chief_complaint" required maxlength="200" placeholder="e.g., chest feels heavy, dizzy spells">
+                    </div>
+
+                    <!-- Symptom Details -->
+                    <div class="form-group">
+                        <label for="symptoms_description">Symptom Details</label>
+                        <textarea id="symptoms_description" name="symptoms_description" rows="3" placeholder="When did it start? How severe? What makes it better/worse?"></textarea>
+                    </div>
+
+                    <!-- Current Medications -->
+                    <div class="form-group">
+                        <label for="current_medications">Current Medications</label>
+                        <input type="text" id="current_medications" name="current_medications" placeholder="e.g., lisinopril, atorvastatin (comma-separated)">
+                    </div>
+
+                    <!-- Allergies -->
+                    <div class="form-group">
+                        <label for="allergies">Allergies</label>
+                        <input type="text" id="allergies" name="allergies" placeholder="e.g., penicillin, sulfa drugs (comma-separated)">
+                    </div>
+
+                    <!-- Age Group -->
+                    <div class="form-group">
+                        <label for="age_group">Age Group</label>
+                        <select id="age_group" name="age_group">
+                            <option value="">Select age range...</option>
+                            <option value="18-30">18-30</option>
+                            <option value="30-40">30-40</option>
+                            <option value="40-50">40-50</option>
+                            <option value="50-60">50-60</option>
+                            <option value="60-70">60-70</option>
+                            <option value="70-80">70-80</option>
+                            <option value="80+">80+</option>
+                        </select>
+                    </div>
+
+                    <!-- Prior Conditions -->
+                    <div class="form-group">
+                        <label for="prior_conditions">Prior Medical Conditions</label>
+                        <input type="text" id="prior_conditions" name="prior_conditions" placeholder="e.g., hypertension, diabetes (comma-separated)">
                     </div>
 
                     <!-- Appointment Type -->
@@ -73,113 +118,72 @@
                         </select>
                     </div>
 
-                    <!-- Special Notes -->
-                    <div class="form-group">
-                        <label for="special_notes">Special Notes (Optional)</label>
-                        <textarea id="special_notes" name="special_notes" rows="3" placeholder="Any special considerations..."></textarea>
-                    </div>
-
                     <!-- Submit Button -->
                     <button type="submit" class="btn-primary" id="generate-btn">
                         <span id="btn-text">🚀 Generate Prep Plan</span>
                         <span id="btn-spinner" class="spinner" style="display: none;"></span>
                     </button>
 
-                    <!-- Sample Data -->
+                    <!-- Sample Cases -->
                     <div class="sample-section">
-                        <p class="sample-label">Quick Test:</p>
+                        <p class="sample-label">Quick Test Cases:</p>
                         <div class="sample-buttons">
-                            <button type="button" class="btn-sample" data-sample-id="0">Surgery</button>
-                            <button type="button" class="btn-sample" data-sample-id="1">Imaging</button>
-                            <button type="button" class="btn-sample" data-sample-id="2">Lab Work</button>
+                            <button type="button" class="btn-sample" data-case-id="0">Chest Pain</button>
+                            <button type="button" class="btn-sample" data-case-id="1">Surgery</button>
+                            <button type="button" class="btn-sample" data-case-id="2">Colonoscopy</button>
+                            <button type="button" class="btn-sample" data-case-id="3">Dizziness</button>
+                            <button type="button" class="btn-sample" data-case-id="4">MRI</button>
                         </div>
                     </div>
                 </form>
             </aside>
 
-            <!-- Center Panel: Agent Response -->
+            <!-- Center Panel: Dual Output -->
             <main class="response-panel">
                 <!-- Welcome State -->
                 <div id="welcome-state" class="welcome-state">
                     <div class="welcome-icon">🏥</div>
-                    <h2>Welcome to Your AI Prep Assistant</h2>
-                    <p>Fill in the appointment details on the left, and I'll generate a comprehensive preparation plan with:</p>
+                    <h2>Three-Phase Appointment Prep Agent</h2>
+                    <p>Fill in the patient intake form, and I'll generate:</p>
                     <ul class="welcome-features">
-                        <li>✓ Fasting instructions</li>
-                        <li>✓ Diet guidance</li>
-                        <li>✓ Medication reminders</li>
-                        <li>✓ What to bring checklist</li>
-                        <li>✓ Arrival instructions</li>
-                        <li>✓ Red flag warnings</li>
+                        <li>✓ Phase I: Triage & symptom assessment</li>
+                        <li>✓ Phase II: Admin prep & logistics</li>
+                        <li>✓ Phase III: Clinical briefing for staff</li>
                     </ul>
+                    <div class="phase-badges">
+                        <span class="badge badge-phase1">Triage & Intake</span>
+                        <span class="badge badge-phase2">Admin Prep</span>
+                        <span class="badge badge-phase3">Clinical Briefing</span>
+                    </div>
                 </div>
 
                 <!-- Error State -->
                 <div id="error-state" class="error-state" style="display: none;">
                     <div class="error-icon">⚠️</div>
-                    <h3>Validation Issues</h3>
+                    <h3>Processing Issues</h3>
                     <div id="error-messages" class="error-messages"></div>
                 </div>
 
-                <!-- Success State -->
+                <!-- Success State: Two-Column Output -->
                 <div id="success-state" class="success-state" style="display: none;">
-                    <!-- Summary -->
-                    <div class="prep-section summary-section">
-                        <h2>📋 Appointment Summary</h2>
-                        <div id="appointment-summary" class="section-content"></div>
-                    </div>
+                    <div class="output-grid">
+                        <!-- Left: Patient Prep -->
+                        <div class="output-column patient-column">
+                            <div class="column-header patient-header">
+                                <h2>👤 Patient Preparation</h2>
+                                <button id="copy-patient-btn" class="btn-icon" title="Copy patient prep">📋</button>
+                            </div>
+                            <div id="patient-prep-content" class="output-content"></div>
+                        </div>
 
-                    <!-- Fasting Plan -->
-                    <div class="prep-section" id="fasting-section" style="display: none;">
-                        <h2>🍽️ Fasting Instructions</h2>
-                        <div id="fasting-plan" class="section-content"></div>
-                    </div>
-
-                    <!-- Diet Guidance -->
-                    <div class="prep-section" id="diet-section" style="display: none;">
-                        <h2>🥗 Diet Guidance</h2>
-                        <div id="diet-guidance" class="section-content"></div>
-                    </div>
-
-                    <!-- Medication Instructions -->
-                    <div class="prep-section">
-                        <h2>💊 Medication Instructions</h2>
-                        <div id="medication-instructions" class="section-content"></div>
-                    </div>
-
-                    <!-- Items to Bring -->
-                    <div class="prep-section">
-                        <h2>🎒 What to Bring</h2>
-                        <div id="items-to-bring" class="section-content"></div>
-                    </div>
-
-                    <!-- Arrival Instructions -->
-                    <div class="prep-section">
-                        <h2>🚗 Arrival Instructions</h2>
-                        <div id="arrival-instructions" class="section-content"></div>
-                    </div>
-
-                    <!-- Transport Instructions -->
-                    <div class="prep-section" id="transport-section" style="display: none;">
-                        <h2>🚕 Transportation Requirements</h2>
-                        <div id="transport-instructions" class="section-content"></div>
-                    </div>
-
-                    <!-- Red Flag Warnings -->
-                    <div class="prep-section warning-section">
-                        <h2>🚨 When to Call the Clinic</h2>
-                        <div id="red-flag-warnings" class="section-content"></div>
-                    </div>
-
-                    <!-- Closing Note -->
-                    <div class="prep-section closing-section">
-                        <div id="closing-note" class="section-content"></div>
-                    </div>
-
-                    <!-- Actions -->
-                    <div class="action-buttons">
-                        <button id="copy-btn" class="btn-secondary">📋 Copy All</button>
-                        <button id="print-btn" class="btn-secondary">🖨️ Print</button>
+                        <!-- Right: Clinician Summary -->
+                        <div class="output-column clinician-column">
+                            <div class="column-header clinician-header">
+                                <h2>👨‍⚕️ Clinician Summary</h2>
+                                <button id="copy-clinician-btn" class="btn-icon" title="Copy clinician summary">📋</button>
+                            </div>
+                            <div id="clinician-summary-content" class="output-content"></div>
+                        </div>
                     </div>
                 </div>
             </main>
@@ -199,7 +203,7 @@
                 <!-- History -->
                 <div class="history-section">
                     <div class="panel-header">
-                        <h2>📚 Recent Plans</h2>
+                        <h2>📚 Recent Cases</h2>
                     </div>
                     <div id="history-list" class="history-content">
                         <p class="history-empty">No history yet</p>

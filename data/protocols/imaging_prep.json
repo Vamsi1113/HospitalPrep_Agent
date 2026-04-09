@@ -1,0 +1,54 @@
+{
+  "id": "imaging_prep",
+  "type": "imaging",
+  "procedure": "diagnostic imaging",
+  "keywords": ["mri", "ct", "scan", "imaging", "radiology", "x-ray", "ultrasound"],
+  "instructions": {
+    "general": [
+      "Bring photo ID and insurance card",
+      "Bring prior imaging CDs if available",
+      "Wear clothing without metal"
+    ],
+    "fasting": {
+      "hours": 0,
+      "description": "No fasting required for most imaging",
+      "contrast_exception": {
+        "hours": 4,
+        "description": "If contrast is ordered, do not eat for 4 hours before scan"
+      }
+    },
+    "transport": {
+      "required": false,
+      "description": "You can drive yourself unless sedation is used"
+    },
+    "medications": {
+      "general": "Take all regular medications",
+      "metformin": "If taking metformin and receiving contrast, follow special instructions",
+      "allergies": "Inform technician of any allergies, especially to contrast or iodine"
+    },
+    "arrival": {
+      "minutes_early": 15,
+      "description": "Arrive 15 minutes early to complete paperwork"
+    },
+    "paperwork": [
+      "Complete imaging requisition form",
+      "Provide insurance authorization if required",
+      "Complete MRI safety screening if applicable"
+    ],
+    "mri_specific": {
+      "remove_metal": "Remove all metal objects including jewelry, watches, hairpins",
+      "inform_about": "Pacemakers, implants, metal fragments, tattoos",
+      "claustrophobia": "Inform staff if you are claustrophobic"
+    },
+    "ct_contrast": {
+      "kidney_function": "Recent kidney function test may be required",
+      "hydration": "Drink plenty of water after scan to flush contrast"
+    }
+  },
+  "red_flags": [
+    "Severe allergic reaction history to contrast",
+    "Kidney disease with contrast ordered",
+    "Pregnancy (for CT or X-ray)"
+  ],
+  "source": "radiology_department_2024"
+}
