@@ -16,6 +16,7 @@ from typing import TypedDict, Optional, List, Dict, Any, Literal
 class SchedulingData(TypedDict):
     """Scheduling information for appointment booking."""
     available_slots: List[Dict[str, Any]]
+    scheduling_options: List[Dict[str, Any]]
     selected_slot: Optional[Dict[str, Any]]
     booking_confirmed: bool
     event_id: Optional[str]
@@ -47,6 +48,17 @@ class AgentPhase(TypedDict):
     completed_phases: List[str]
     next_phase: Optional[str]
 
+
+class ConversationData(TypedDict):
+    """Conversational Intake Tracking."""
+    missing_fields: List[str]
+    suggested_options: Dict[str, List[str]]
+    confidence_score: float
+    confidence_scores: Dict[str, float]
+    current_transcript: Optional[str]
+    is_voice: bool
+    input_mode: str  # "text" or "voice"
+    user_confirmations: Dict[str, bool]
 
 class IntakeData(TypedDict):
     """Structured intake data from Phase I."""
@@ -163,6 +175,7 @@ class AgentState(TypedDict):
     
     # Phase I: Triage & Intake
     raw_intake: Dict[str, Any]
+    conversation_data: Optional[ConversationData]
     intake_data: Optional[IntakeData]
     triage_data: Optional[TriageData]
     
@@ -179,6 +192,9 @@ class AgentState(TypedDict):
     
     # Phase V: Post-Procedure
     post_procedure_data: Optional[PostProcedureData]
+    
+    # Hospital Suggestions (NEW)
+    hospital_data: Optional[Dict[str, Any]]
     
     # Legacy fields (for backward compatibility)
     input_data: Dict[str, Any]
@@ -221,26 +237,46 @@ def create_initial_state(raw_intake: Dict[str, Any]) -> AgentState:
         agent_phase=None,
         
         # Phase 0: Scheduling
-        scheduling_data=None,
+        scheduling_data={
+            "available_slots": [],
+            "scheduling_options": [],
+            "selected_slot": None,
+            "booking_confirmed": False,
+            "event_id": None,
+            "confirmation_sent": False
+        },
         
         # Phase I: Triage & Intake
         raw_intake=raw_intake,
-        intake_data=None,
-        triage_data=None,
+        conversation_data={
+            "missing_fields": [],
+            "suggested_options": {},
+            "confidence_score": 1.0,
+            "confidence_scores": {},
+            "current_transcript": raw_intake.get("conversational_query"),
+            "is_voice": raw_intake.get("input_mode") == "voice",
+            "input_mode": raw_intake.get("input_mode", "text"),
+            "user_confirmations": {}
+        },
+        intake_data={},
+        triage_data={},
         
         # Phase II: Admin Prep
-        admin_prep_data=None,
-        retrieved_protocols=None,
+        admin_prep_data={},
+        retrieved_protocols=[],
         
         # Phase III: Clinical Briefing
-        ehr_context=raw_intake.get("ehr_context"),
-        clinical_briefing=None,
+        ehr_context=raw_intake.get("ehr_context") or {},
+        clinical_briefing={},
         
         # Phase IV: Patient Chat
-        chat_history=None,
+        chat_history=[],
         
         # Phase V: Post-Procedure
-        post_procedure_data=None,
+        post_procedure_data={},
+        
+        # Hospital Suggestions
+        hospital_data={},
         
         # Legacy fields
         input_data=raw_intake,

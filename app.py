@@ -26,7 +26,12 @@ from services.retrieval import ProtocolRetrieval
 from services.calendar_service import CalendarService
 from services.sms_service import SMSService
 from services.email_service import EmailService
+from services.context_manager import get_context_manager
 from agent.graph import run_agent
+from agent.prompts import build_chat_prompt
+import tempfile
+import speech_recognition as sr
+import io
 
 # Load environment variables from .env file
 load_dotenv()
@@ -105,6 +110,11 @@ def generate_prep_message():
                 "messages": ["No intake data provided"]
             }), 400
         
+        # Build shared context
+        session_id = raw_intake.get("session_id", "default_session")
+        ctx_mgr = get_context_manager()
+        ctx_mgr.build_from_intake(session_id, raw_intake)
+
         # Generate THREE-PHASE prep using LangGraph agent
         result = run_agent(
             raw_intake,
@@ -113,6 +123,13 @@ def generate_prep_message():
             llm_client,
             storage
         )
+
+        if not result.get("error"):
+            # Update shared context with generated outputs
+            ctx_mgr.update_context(session_id, {
+                "prep_output": result.get("patient_message"),
+                "clinical_briefing": result.get("clinician_summary")
+            })
         
         # Check for errors
         if result.get("error"):
@@ -339,7 +356,7 @@ def get_available_slots():
 
 
 @app.route('/api/book', methods=['POST'])
-def book_appointment():
+def book_slot():
     """
     Book an appointment slot.
     
@@ -479,66 +496,42 @@ def patient_chat():
                 "messages": ["No question provided"]
             }), 400
         
-        session_id = data.get("session_id", "default")
+        session_id = data.get("session_id", "default_session")
         
-        # Get or create session state
-        session_state = storage.get_session_state(session_id)
-        if not session_state:
-            session_state = {
-                "chat_history": [],
-                "appointment_type": data.get("appointment_type", ""),
-                "procedure": data.get("procedure", "")
-            }
+        ctx_mgr = get_context_manager()
+        context = ctx_mgr.get_context(session_id)
         
-        # Add patient question
-        session_state["chat_history"].append({
-            "role": "patient",
-            "content": data["question"],
-            "timestamp": datetime.now().isoformat()
-        })
-        
-        # Generate response using retrieval + LLM
-        context_docs = []
-        if retrieval_service and retrieval_service.is_available():
-            protocols = retrieval_service.retrieve_protocols(
-                appointment_type=session_state.get("appointment_type", ""),
-                procedure=session_state.get("procedure", ""),
-                max_results=2
-            )
-            context_docs = [p.get("content", "") for p in protocols]
-        
-        if llm_client and llm_client.is_available():
-            context_str = "\n\n".join(context_docs)
-            prompt = f"""You are a helpful medical appointment assistant. Answer the patient's question based on the context provided.
-
-Context:
-{context_str}
-
-Patient Question: {data['question']}
-
-Provide a clear, helpful answer. If the question is outside the scope of appointment preparation, politely redirect to contacting the clinic."""
+        # If no context found (e.g. server restart), create a minimal one
+        if not context:
+            context = ctx_mgr.build_from_intake(session_id, data)
             
-            response = llm_client.generate_with_prompt(
-                "You are a medical appointment assistant.",
-                prompt
+        # Add patient question to context
+        ctx_mgr.append_chat(session_id, "patient", data["question"])
+        chat_history = ctx_mgr.get_context(session_id).get("chat_history", [])
+        
+        # Generate response using context-aware prompt
+        if llm_client and llm_client.is_available():
+            system_prompt, user_prompt = build_chat_prompt(
+                context=context,
+                question=data["question"],
+                chat_history=chat_history
             )
+            response = llm_client.generate_with_prompt(system_prompt, user_prompt)
+            if not response:
+                response = "I'm having a little trouble connecting right now. Please try again or contact the clinic."
         else:
-            response = "I'm here to help with appointment preparation questions. For specific medical advice, please contact your doctor."
+            response = "I'm here to help with appointment preparation questions. For specific medical advice, please contact the clinic directly."
         
-        # Add agent response
-        session_state["chat_history"].append({
-            "role": "agent",
-            "content": response,
-            "timestamp": datetime.now().isoformat()
-        })
+        # Add agent response to context
+        ctx_mgr.append_chat(session_id, "agent", response)
         
-        # Save session state
-        storage.save_session_state(session_id, session_state)
+        # Save session state to persistent storage
+        storage.save_session_state(session_id, ctx_mgr.get_context(session_id))
         
         return jsonify({
             "error": False,
             "response": response,
-            "chat_history": session_state["chat_history"]
+            "chat_history": ctx_mgr.get_context(session_id).get("chat_history", [])
         }), 200
         
     except Exception as e:
@@ -547,6 +540,216 @@ Provide a clear, helpful answer. If the question is outside the scope of appoint
             "error": True,
             "messages": ["Failed to process chat message"]
         }), 500
+
+
+@app.route('/api/transcribe', methods=['POST'])
+def transcribe_audio():
+    """
+    Transcribe audio from frontend voice recording.
+    Expects a WAV file in the 'audio' field of FormData.
+    """
+    try:
+        if 'audio' not in request.files:
+            return jsonify({"error": True, "messages": ["No audio provided. Please ensure the microphone was recorded."]}), 400
+            
+        file = request.files['audio']
+        
+        recognizer = sr.Recognizer()
+        
+        with sr.AudioFile(file) as source:
+            audio_data = recognizer.record(source)
+            text = recognizer.recognize_google(audio_data)
+            return jsonify({"error": False, "text": text}), 200
+            
+    except sr.UnknownValueError:
+        return jsonify({"error": False, "text": ""}), 200  # No text detected but no hard error
+    except sr.RequestError as e:
+        app.logger.error(f"Speech recognition API error: {e}")
+        return jsonify({"error": True, "messages": ["Speech recognition service is currently unavailable."]}), 503
+    except Exception as e:
+        app.logger.error(f"Transcribe error: {type(e).__name__}: {str(e)}")
+        return jsonify({"error": True, "messages": ["Failed to transcribe audio. Ensure it is a valid WAV format."]}), 500
+
+
+@app.route('/api/analyze', methods=['POST'])
+def analyze_patient():
+    """
+    Step 2 of the agentic flow: Analyze patient intake data.
+    - Triages the symptoms (urgency, red flags)
+    - Generates doctor suggestions based on procedure/complaint
+    - Returns scheduling slots for each suggested doctor
+
+    Expects JSON with patient intake fields.
+    Returns: doctors[], hospital_suggestions[], slots[]
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": True, "messages": ["No data provided"]}), 400
+
+        complaint = data.get("chief_complaint", "").lower()
+        procedure = data.get("procedure", "").lower()
+        symptoms  = data.get("symptoms_description", "").lower()
+
+        combined = f"{complaint} {procedure} {symptoms}"
+
+        # ── Triage ──────────────────────────────────────────────
+        urgency = "routine"
+        red_flags = []
+        if any(k in combined for k in ["chest pain", "chest tight", "chest pressure", "heart", "cardiac"]):
+            urgency = "urgent"
+            red_flags.append("Potential cardiac symptoms — expedited consult recommended")
+        if any(k in combined for k in ["severe", "emergency", "cannot breathe", "unconscious"]):
+            urgency = "emergency"
+            red_flags.append("Emergency indicators detected — immediate care needed")
+
+        # ── Specialty detection ──────────────────────────────────
+        specialty_map = {
+            "cardiology": ["chest", "heart", "cardiac", "palpitation", "blood pressure"],
+            "gastroenterology": ["colonoscopy", "endoscopy", "stomach", "bowel", "colon", "abdomen"],
+            "radiology": ["mri", "ct scan", "x-ray", "imaging", "scan"],
+            "orthopedics": ["knee", "hip", "bone", "joint", "fracture", "spine"],
+            "neurology": ["headache", "dizziness", "migraine", "nerve", "seizure"],
+            "general medicine": ["checkup", "consultation", "fever", "flu", "general"],
+            "oncology": ["cancer", "tumor", "biopsy", "chemotherapy"],
+            "pulmonology": ["lung", "breathing", "asthma", "cough", "respiratory"],
+        }
+
+        matched_specialty = "general medicine"
+        for specialty, keywords in specialty_map.items():
+            if any(k in combined for k in keywords):
+                matched_specialty = specialty
+                break
+
+        # ── Doctor pool (with scheduling slots) ─────────────────
+        from datetime import timedelta
+        now = datetime.now()
+
+        def slots_for_doctor(doc_id):
+            return [
+                {
+                    "slot_id": f"{doc_id}_slot_{i}",
+                    "datetime_display": (now + timedelta(days=i+1, hours=9)).strftime("%b %d, %Y at %I:%M %p"),
+                    "datetime_iso": (now + timedelta(days=i+1, hours=9)).isoformat(),
+                    "duration": "45 min",
+                    "location": "Main Clinic",
+                    "available": True
+                }
+                for i in range(3)
+            ]
+
+        all_doctors = {
+            "cardiology": [
+                {"id": "dr_001", "name": "Dr. Sarah Johnson", "specialty": "Cardiologist", "rating": 4.9, "hospital": "St. Jude Premier Health", "hospital_rating": 4.9, "hospital_location": "Downtown", "experience": "15 years", "image_initial": "SJ"},
+                {"id": "dr_002", "name": "Dr. Michael Chen", "specialty": "Interventional Cardiologist", "rating": 4.8, "hospital": "Metro Heart Institute", "hospital_rating": 4.7, "hospital_location": "East Side", "experience": "12 years", "image_initial": "MC"},
+            ],
+            "gastroenterology": [
+                {"id": "dr_003", "name": "Dr. Priya Patel", "specialty": "Gastroenterologist", "rating": 4.9, "hospital": "Metro General Hospital", "hospital_rating": 4.5, "hospital_location": "East Side", "experience": "10 years", "image_initial": "PP"},
+                {"id": "dr_004", "name": "Dr. James Wilson", "specialty": "GI Specialist", "rating": 4.7, "hospital": "Hope Medical Center", "hospital_rating": 4.6, "hospital_location": "Central Hills", "experience": "18 years", "image_initial": "JW"},
+            ],
+            "radiology": [
+                {"id": "dr_005", "name": "Dr. Lisa Park", "specialty": "Radiologist", "rating": 4.8, "hospital": "Valley Imaging Center", "hospital_rating": 4.8, "hospital_location": "North Suburbs", "experience": "11 years", "image_initial": "LP"},
+            ],
+            "neurology": [
+                {"id": "dr_006", "name": "Dr. Robert Martinez", "specialty": "Neurologist", "rating": 4.7, "hospital": "NeuroHealth Institute", "hospital_rating": 4.6, "hospital_location": "West Park", "experience": "16 years", "image_initial": "RM"},
+            ],
+            "general medicine": [
+                {"id": "dr_007", "name": "Dr. Emily Brown", "specialty": "General Physician", "rating": 4.6, "hospital": "City Medical Clinic", "hospital_rating": 4.5, "hospital_location": "Central", "experience": "9 years", "image_initial": "EB"},
+                {"id": "dr_008", "name": "Dr. David Kim", "specialty": "Internal Medicine", "rating": 4.5, "hospital": "Hope Medical Center", "hospital_rating": 4.6, "hospital_location": "Central Hills", "experience": "14 years", "image_initial": "DK"},
+            ],
+            "orthopedics": [
+                {"id": "dr_009", "name": "Dr. Susan Lee", "specialty": "Orthopedic Surgeon", "rating": 4.8, "hospital": "Bone & Joint Institute", "hospital_rating": 4.7, "hospital_location": "North", "experience": "20 years", "image_initial": "SL"},
+            ],
+            "oncology": [
+                {"id": "dr_010", "name": "Dr. Thomas Grant", "specialty": "Oncologist", "rating": 4.9, "hospital": "Regional Cancer Center", "hospital_rating": 4.9, "hospital_location": "Medical District", "experience": "22 years", "image_initial": "TG"},
+            ],
+            "pulmonology": [
+                {"id": "dr_011", "name": "Dr. Nancy Wright", "specialty": "Pulmonologist", "rating": 4.7, "hospital": "Lung Health Clinic", "hospital_rating": 4.5, "hospital_location": "South Side", "experience": "13 years", "image_initial": "NW"},
+            ],
+        }
+
+        doctors = all_doctors.get(matched_specialty, all_doctors["general medicine"])
+        for doc in doctors:
+            doc["slots"] = slots_for_doctor(doc["id"])
+
+        app.logger.info(f"Analyzed: specialty={matched_specialty}, urgency={urgency}")
+
+        return jsonify({
+            "error": False,
+            "triage": {
+                "urgency": urgency,
+                "red_flags": red_flags,
+                "specialty": matched_specialty
+            },
+            "doctors": doctors,
+            "intake_snapshot": data  # echo back so frontend can pass to next step
+        }), 200
+
+    except Exception as e:
+        app.logger.error(f"Analyze error: {type(e).__name__}: {str(e)}")
+        return jsonify({"error": True, "messages": [f"Analysis failed: {str(e)}"]}), 500
+
+
+@app.route('/api/book-appointment', methods=['POST'])
+def book_appointment():
+    """
+    Step 4 of the agentic flow: Confirm booking and generate patient prep.
+    Expects JSON with:
+    - intake_data: original patient intake
+    - selected_doctor: {name, specialty, hospital}
+    - selected_slot: {datetime_display, datetime_iso, location}
+
+    Returns: booking_confirmation + patient_message + clinician_summary
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": True, "messages": ["No booking data provided"]}), 400
+
+        intake = data.get("intake_data", {})
+        doctor = data.get("selected_doctor", {})
+        slot   = data.get("selected_slot", {})
+
+        if not doctor or not slot:
+            return jsonify({"error": True, "messages": ["Doctor and slot selection required"]}), 400
+
+        # Merge the confirmed booking details into the raw_intake
+        raw_intake = {**intake}
+        raw_intake["clinician_name"]        = doctor.get("name", intake.get("clinician_name", ""))
+        raw_intake["appointment_datetime"]  = slot.get("datetime_display", intake.get("appointment_datetime", ""))
+        raw_intake["appointment_type"]      = intake.get("appointment_type", "Consultation")
+        raw_intake["procedure"]             = intake.get("procedure", doctor.get("specialty", "Consultation"))
+
+        # Run the full agent to generate patient prep + clinician brief
+        result = run_agent(raw_intake, rules_engine, retrieval_service, llm_client, storage)
+
+        if result.get("error"):
+            app.logger.warning(f"Agent error during booking: {result.get('messages')}")
+            return jsonify(result), 400
+
+        # Build booking confirmation
+        confirmation = {
+            "error": False,
+            "booking": {
+                "doctor_name":   doctor.get("name"),
+                "specialty":     doctor.get("specialty"),
+                "hospital":      doctor.get("hospital"),
+                "hospital_location": doctor.get("hospital_location"),
+                "date_time":     slot.get("datetime_display"),
+                "location":      slot.get("location", "Main Clinic"),
+                "duration":      slot.get("duration", "45 min"),
+                "confirmation_id": f"PREPCARE-{int(datetime.now().timestamp())}"
+            },
+            "patient_message":   result.get("patient_message"),
+            "clinician_summary": result.get("clinician_summary"),
+        }
+
+        app.logger.info(f"Appointment booked: {confirmation['booking']['confirmation_id']}")
+        return jsonify(confirmation), 200
+
+    except Exception as e:
+        app.logger.error(f"Book appointment error: {type(e).__name__}: {str(e)}")
+        return jsonify({"error": True, "messages": [f"Booking failed: {str(e)}"]}), 500
 
 
 @app.route('/api/post-procedure', methods=['POST'])

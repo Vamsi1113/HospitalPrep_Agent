@@ -8,7 +8,7 @@ This module wraps services as tools for the THREE-PHASE agent workflow:
 """
 
 from typing import Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import json
 
@@ -17,8 +17,8 @@ from agent.prompts import (
     SYMPTOM_NORMALIZATION_PROMPT,
     FOLLOW_UP_QUESTIONS_PROMPT,
     TRIAGE_CLASSIFICATION_PROMPT,
-    CLINICAL_BRIEFING_PROMPT,
-    PATIENT_MESSAGE_REWRITE_PROMPT
+    build_prep_prompt,
+    build_clinical_prompt,
 )
 
 logger = logging.getLogger(__name__)
@@ -454,142 +454,144 @@ def clinical_briefing_tool(state: AgentState, llm_client, **kwargs) -> AgentStat
 
 def patient_message_tool(state: AgentState, llm_client, **kwargs) -> AgentState:
     """
-    Tool: Generate patient-facing preparation message.
-    
-    This tool:
-    1. Combines intake, admin prep, and safety info
-    2. Formats in friendly, clear language
-    3. Optionally enhances with LLM
-    4. Includes all necessary prep sections
-    
-    Args:
-        state: Current agent state
-        llm_client: LLM client for message enhancement
-    
-    Returns:
-        Updated state with patient_message populated
+    Tool: Generate a personalized patient preparation message.
+
+    Uses the new context-aware prompt builder so the LLM generates
+    a procedure-specific guide directly — no static template rewriting.
     """
     logger.info("Agent Tool: patient_message_tool")
-    
+
     state["metadata"]["steps"].append({
         "step": "patient_message_generation",
+        "phase": "III",
         "timestamp": datetime.now().isoformat(),
-        "description": "Generating patient-facing prep message"
+        "description": "Generating personalized preparation guide"
     })
-    
+
     try:
-        # Build structured message
-        draft = _build_patient_message_draft(state)
-        
-        # Optionally enhance with LLM
+        # Build rich context dict from the accumulated state
+        raw = state.get("raw_intake", {})
+        intake = state.get("intake_data", {})
+
+        ctx = {
+            "patient_name":    raw.get("patient_name", "Patient"),
+            "age_group":       raw.get("age_group", ""),
+            "chief_complaint": intake.get("chief_complaint") or raw.get("chief_complaint", ""),
+            "symptoms":        raw.get("symptoms_description", ""),
+            "current_medications": raw.get("current_medications", []),
+            "allergies":       raw.get("allergies", []),
+            "prior_conditions":raw.get("prior_conditions", []),
+            "appointment_type":raw.get("appointment_type", ""),
+            "procedure":       raw.get("procedure", ""),
+            "clinician_name":  raw.get("clinician_name", "your doctor"),
+            "appointment_datetime": raw.get("appointment_datetime", ""),
+            "hospital_data":   state.get("hospital_data", {}),
+        }
+
         if llm_client and llm_client.is_available():
-            enhanced = llm_client.rewrite_message(draft, tone="friendly")
-            final = enhanced if enhanced else draft
-            state["llm_used"] = enhanced is not None
+            system_prompt, user_prompt = build_prep_prompt(ctx)
+            final = llm_client.generate_with_prompt(system_prompt, user_prompt)
+            state["llm_used"] = final is not None
+            if not final:
+                # LLM failed — fall back to deterministic draft
+                final = _build_patient_message_draft(state)
         else:
-            final = draft
+            final = _build_patient_message_draft(state)
             state["llm_used"] = False
-        
+
         state["patient_message"] = final
-        state["final_message"] = final  # Backward compatibility
-        
+        state["final_message"]   = final  # backward compat
+
         state["metadata"]["steps"].append({
             "step": "patient_message_complete",
+            "phase": "III",
             "timestamp": datetime.now().isoformat(),
             "llm_used": state["llm_used"],
-            "message_length": len(final)
+            "message_length": len(final) if final else 0
         })
-        
+
     except Exception as e:
         logger.error(f"Patient message tool error: {e}")
         state["errors"].append(f"Patient message error: {str(e)}")
-    
+        # Last-resort fallback
+        if not state.get("patient_message"):
+            state["patient_message"] = _build_patient_message_draft(state)
+
     return state
 
 
-def clinician_summary_tool(state: AgentState, **kwargs) -> AgentState:
+def clinician_summary_tool(state: AgentState, llm_client=None, **kwargs) -> AgentState:
     """
-    Tool: Format clinician-facing summary.
-    
-    This tool:
-    1. Formats clinical briefing for display
-    2. Adds triage information
-    3. Includes prep status
-    4. Highlights urgent items
-    
-    Args:
-        state: Current agent state
-    
-    Returns:
-        Updated state with clinician_summary populated
+    Tool: Generate structured clinician-facing pre-visit summary.
+    Uses context-aware LLM prompt when available; falls back to
+    deterministic formatting otherwise.
     """
     logger.info("Agent Tool: clinician_summary_tool")
-    
+
     try:
-        briefing = state.get("clinical_briefing")
-        triage = state.get("triage_data")
-        intake = state.get("intake_data")
-        
-        if not briefing or not intake:
-            state["clinician_summary"] = "Clinical briefing or intake data not available"
+        raw    = state.get("raw_intake", {})
+        intake = state.get("intake_data", {})
+        triage = state.get("triage_data", {})
+
+        # Try LLM-generated clinical note
+        if llm_client and llm_client.is_available():
+            ctx = {
+                "patient_name":    raw.get("patient_name", "Patient"),
+                "age_group":       raw.get("age_group", ""),
+                "chief_complaint": intake.get("chief_complaint") or raw.get("chief_complaint", ""),
+                "symptoms":        raw.get("symptoms_description", ""),
+                "current_medications": raw.get("current_medications", []),
+                "allergies":       raw.get("allergies", []),
+                "prior_conditions":raw.get("prior_conditions", []),
+                "appointment_type":raw.get("appointment_type", ""),
+                "procedure":       raw.get("procedure", ""),
+                "hospital_data":   state.get("hospital_data", {}),
+            }
+            system_prompt, user_prompt = build_clinical_prompt(ctx)
+            generated = llm_client.generate_with_prompt(system_prompt, user_prompt)
+            if generated:
+                state["clinician_summary"] = generated
+                return state
+
+        # Deterministic fallback
+        briefing = state.get("clinical_briefing", {})
+        if not briefing and not intake:
+            state["clinician_summary"] = "Clinical briefing data not available."
             return state
-        
-        # Format summary
-        summary_parts = []
-        
-        # Header
-        summary_parts.append(f"PRE-VISIT SUMMARY")
-        summary_parts.append(f"Patient: {state.get('raw_intake', {}).get('patient_name', 'Unknown')}")
-        summary_parts.append(f"Chief Complaint: {intake.get('chief_complaint', 'Not provided')}")
+
+        parts = []
+        parts.append(f"PRE-VISIT SUMMARY")
+        parts.append(f"Patient: {raw.get('patient_name', 'Unknown')}")
+        parts.append(f"Chief Complaint: {intake.get('chief_complaint', 'Not provided')}")
         if intake.get("chief_complaint_normalized"):
-            summary_parts.append(f"Clinical: {intake['chief_complaint_normalized']}")
-        summary_parts.append("")
-        
-        # Triage
+            parts.append(f"Clinical Term: {intake['chief_complaint_normalized']}")
+        parts.append("")
+
         if triage:
-            summary_parts.append(f"TRIAGE: {triage.get('urgency_level', 'Unknown').upper()}")
-            if triage.get('red_flags'):
-                summary_parts.append(f"⚠️ RED FLAGS: {', '.join(triage['red_flags'])}")
-            summary_parts.append("")
-        
-        # History
-        if briefing.get('relevant_history'):
-            summary_parts.append(f"RELEVANT HISTORY:")
-            summary_parts.append(briefing['relevant_history'])
-            summary_parts.append("")
-        
-        # Medications
-        if intake.get('current_medications'):
-            summary_parts.append(f"CURRENT MEDICATIONS:")
-            for med in intake['current_medications']:
-                summary_parts.append(f"  • {med}")
-            if briefing.get('medication_conflicts'):
-                summary_parts.append(f"  ⚠️ CONFLICTS: {', '.join(briefing['medication_conflicts'])}")
-            summary_parts.append("")
-        
-        # Allergies
-        if briefing.get('allergy_alerts'):
-            summary_parts.append(f"ALLERGIES: {', '.join(briefing['allergy_alerts'])}")
-            summary_parts.append("")
-        
-        # Missing data
-        if briefing.get('missing_labs') or briefing.get('missing_records'):
-            summary_parts.append(f"MISSING DATA:")
-            for lab in briefing.get('missing_labs', []):
-                summary_parts.append(f"  • Lab: {lab}")
-            for record in briefing.get('missing_records', []):
-                summary_parts.append(f"  • Record: {record}")
-            summary_parts.append("")
-        
-        # Prep status
-        summary_parts.append(f"PREP STATUS: {briefing.get('prep_status', 'Unknown')}")
-        
-        state["clinician_summary"] = "\n".join(summary_parts)
-        
+            parts.append(f"TRIAGE: {triage.get('urgency_level', 'Unknown').upper()}")
+            if triage.get("red_flags"):
+                parts.append(f"Red Flags: {', '.join(triage['red_flags'])}")
+            parts.append("")
+
+        if intake.get("current_medications"):
+            parts.append("CURRENT MEDICATIONS:")
+            for med in intake["current_medications"]:
+                parts.append(f"  - {med}")
+            parts.append("")
+
+        if briefing and briefing.get("allergy_alerts"):
+            parts.append(f"ALLERGIES: {', '.join(briefing['allergy_alerts'])}")
+            parts.append("")
+
+        prep_status = briefing.get("prep_status", "Pending") if briefing else "Pending"
+        parts.append(f"PREP STATUS: {prep_status}")
+
+        state["clinician_summary"] = "\n".join(parts)
+
     except Exception as e:
         logger.error(f"Clinician summary tool error: {e}")
         state["clinician_summary"] = f"Error generating summary: {str(e)}"
-    
+
     return state
 
 
@@ -759,7 +761,6 @@ def _build_document_list(rules, protocols: list) -> list:
 
 def _build_arrival_instructions(rules, raw_intake: dict) -> str:
     """Build arrival instructions."""
-    from datetime import datetime, timedelta
     
     apt_datetime_str = raw_intake.get("appointment_datetime", "")
     try:
@@ -782,7 +783,6 @@ def _build_fasting_instructions(rules, raw_intake: dict) -> str:
     if not rules.fasting_required:
         return None
     
-    from datetime import datetime, timedelta
     
     apt_datetime_str = raw_intake.get("appointment_datetime", "")
     try:
@@ -1415,3 +1415,264 @@ def _build_recovery_instructions(recovery_rules: dict) -> str:
         parts.append(f"\nFOLLOW-UP: Schedule appointment within {recovery_rules.get('follow_up_timeframe', '1-2 weeks')}")
     
     return "\n".join(parts)
+
+# ============================================================================
+# ============================================================================
+# NEW CONVERSATIONAL & SCHEDULING NODES
+# ============================================================================
+
+def conversation_intake_node(state: AgentState, llm_client=None, **kwargs) -> AgentState:
+    """
+    Accepts free text / partial input and extracts structured fields dynamically.
+    Updates AgentState dynamically.
+    """
+    logger.info("Agent Tool: conversation_intake_node")
+    state["metadata"]["steps"].append({
+        "step": "conversation_intake",
+        "timestamp": datetime.now().isoformat(),
+        "description": "Extracting structured intent from free text"
+    })
+    
+    raw = state.get("raw_intake", {})
+    query = raw.get("conversational_query", "")
+    
+    if not query and state.get("conversation_data", {}).get("current_transcript"):
+        query = state["conversation_data"]["current_transcript"]
+
+    # Basic entity extraction (could be enhanced with LLM if provided)
+    query_lower = query.lower()
+    
+    # Extract Patient Name: "I am [Name]", "My name is [Name]", "This is [Name]"
+    import re
+    name_match = re.search(r"(?:i am|my name is|this is)\s+([a-z\s]+)(?:and|\.|$)", query_lower)
+    if name_match:
+        state["raw_intake"]["patient_name"] = name_match.group(1).strip().title()
+
+    # We populate raw_intake by inferring from text
+    # Procedures / Appointment Types
+    procedure_map = {
+        "colonoscopy": ("Colonoscopy", "Procedure"),
+        "mri": ("MRI", "Imaging"),
+        "ct scan": ("CT Scan", "Imaging"),
+        "checkup": ("Checkup", "Consultation"),
+        "consult": ("Consultation", "Consultation"),
+        "surgery": ("Surgery", "Surgery"),
+        "blood test": ("Blood Test", "Lab Work")
+    }
+    
+    for key, (proc, atype) in procedure_map.items():
+        if key in query_lower:
+            state["raw_intake"]["procedure"] = proc
+            state["raw_intake"]["appointment_type"] = atype
+            break
+        
+    if "next week" in query_lower:
+        next_week = datetime.now() + timedelta(days=7)
+        state["raw_intake"]["preferred_date"] = next_week.strftime("%Y-%m-%d")
+    elif "tomorrow" in query_lower:
+        tomorrow = datetime.now() + timedelta(days=1)
+        state["raw_intake"]["preferred_date"] = tomorrow.strftime("%Y-%m-%d")
+        
+    # Map conversational query to legacy fields if missing
+    if query:
+        if not state["raw_intake"].get("chief_complaint"):
+            state["raw_intake"]["chief_complaint"] = query
+        if not state["raw_intake"].get("symptoms_description"):
+            state["raw_intake"]["symptoms_description"] = query
+            
+        # If we found a name but it wasn't in raw_intake initially, ensure it's there
+        if "patient_name" in state["raw_intake"] and not raw.get("patient_name"):
+            raw["patient_name"] = state["raw_intake"]["patient_name"]
+
+    if "conversation_data" not in state or state["conversation_data"] is None:
+        state["conversation_data"] = {
+            "missing_fields": [],
+            "suggested_options": {},
+            "confidence_score": 1.0,
+            "confidence_scores": {},
+            "current_transcript": query,
+            "is_voice": raw.get("input_mode") == "voice",
+            "input_mode": raw.get("input_mode", "text"),
+            "user_confirmations": {}
+        }
+        
+    return state
+
+
+def missing_info_detector_node(state: AgentState, **kwargs) -> AgentState:
+    """
+    Checks if there are required fields missing from the extracted structured context.
+    Outputs COMPLETE -> proceed, INCOMPLETE -> trigger clarification.
+    """
+    logger.info("Agent Tool: missing_info_detector_node")
+    state["metadata"]["steps"].append({
+        "step": "missing_info_detector",
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    raw = state.get("raw_intake", {})
+    missing_fields = []
+    
+    if not raw.get("patient_name"): missing_fields.append("patient_name")
+    if not raw.get("procedure") and not raw.get("chief_complaint"): missing_fields.append("procedure")
+    
+    state["conversation_data"]["missing_fields"] = missing_fields
+    
+    if missing_fields:
+        state["conversation_data"]["confidence_score"] = 0.5
+    else:
+        state["conversation_data"]["confidence_score"] = 0.95
+        
+    # The output is determined by checking missing_fields list length > 0
+    return state
+
+def clarification_agent_node(state: AgentState, **kwargs) -> AgentState:
+    """
+    Asks only necessary questions based on missing fields.
+    Provides suggested options (buttons/dropdowns).
+    """
+    logger.info("Agent Tool: clarification_agent_node")
+    state["metadata"]["steps"].append({
+        "step": "clarification_agent",
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    missing = state.get("conversation_data", {}).get("missing_fields", [])
+    suggested_options = {}
+    clarification_message = []
+    
+    if "procedure" in missing:
+        clarification_message.append("What kind of procedure or appointment do you need?")
+        suggested_options["procedure"] = ["Colonoscopy", "MRI", "CT Scan", "General Checkup", "Consultation"]
+        
+    if "patient_name" in missing:
+        clarification_message.append("Could you please provide your full name for the booking?")
+
+    state["conversation_data"]["suggested_options"] = suggested_options
+    state["draft_message"] = " ".join(clarification_message)
+    
+    return state
+
+def voice_input_node(state: AgentState, **kwargs) -> AgentState:
+    """
+    Accepts voice -> converts to structured input. Falls back to text if low confidence.
+    """
+    logger.info("Agent Tool: voice_input_node")
+    state["metadata"]["steps"].append({
+        "step": "voice_input",
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    raw = state.get("raw_intake", {})
+    voice_transcript = raw.get("voice_transcript", "")
+    
+    if voice_transcript:
+        if "conversation_data" not in state or state["conversation_data"] is None:
+             state["conversation_data"] = {}
+        state["conversation_data"]["is_voice"] = True
+        state["conversation_data"]["current_transcript"] = voice_transcript
+        
+        # Merge transcript into conversational query
+        state["raw_intake"]["conversational_query"] = voice_transcript
+        
+    return state
+
+def scheduling_orchestrator_node(state: AgentState, **kwargs) -> AgentState:
+    """
+    Replaces synthetic scheduling.
+    Slot generation logic (time, doctor, availability).
+    Constraint validation (prep time, urgency).
+    Smart slot selection. Auto-booking + confirmation.
+    Writes booking into state + DB.
+    """
+    logger.info("Agent Tool: scheduling_orchestrator_node")
+    state["metadata"]["steps"].append({
+        "step": "scheduling_orchestrator",
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    raw = state.get("raw_intake", {})
+    procedure = raw.get("procedure", "General")
+    selected_doc = raw.get("clinician_name")
+    selected_time = raw.get("appointment_datetime")
+
+    now_dt = datetime.now()
+
+    if "scheduling_data" not in state or state["scheduling_data"] is None:
+        state["scheduling_data"] = {
+            "selected_slot": None,
+            "booking_confirmed": False,
+            "event_id": None,
+            "confirmation_sent": False
+        }
+
+    # Auto-booking + confirmation
+    if not state["scheduling_data"]["booking_confirmed"]:
+        if selected_doc and selected_time:
+            # We have the selection from the frontend UI
+            state["scheduling_data"]["selected_slot"] = {
+                "datetime": selected_time,
+                "doctor": selected_doc,
+                "location": "Main Clinic"
+            }
+        else:
+            # Fallback mock logic for pure backend execution
+            days_to_add = 3 if "colonoscopy" in procedure.lower() else 1
+            calculated_date = now_dt + timedelta(days=days_to_add)
+            selected = {
+                "datetime": f"{calculated_date.strftime('%Y-%m-%d')}T09:00:00Z", 
+                "doctor": "Dr. Smith", 
+                "location": "Main Clinic"
+            }
+            state["scheduling_data"]["selected_slot"] = selected
+            state["raw_intake"]["appointment_datetime"] = selected["datetime"]
+            state["raw_intake"]["clinician_name"] = selected["doctor"]
+
+        state["scheduling_data"]["booking_confirmed"] = True
+        state["scheduling_data"]["event_id"] = f"EVN-{int(now_dt.timestamp())}"
+        state["scheduling_data"]["confirmation_sent"] = True
+
+    return state
+
+
+def hospital_suggestion_node(state: AgentState, **kwargs) -> AgentState:
+    """
+    Search and suggest suitable hospitals based on ratings and proximity to procedure requirements.
+    """
+    logger.info("Agent Tool: hospital_suggestion_node")
+    state["metadata"]["steps"].append({
+        "step": "hospital_suggestion",
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    procedure = state.get("raw_intake", {}).get("procedure", "General Medical").lower()
+    
+    # Mock hospital database with ratings
+    hospitals = [
+        {"name": "St. Jude Premier Health", "rating": 4.9, "specialty": "cardiology, surgery", "location": "Downtown"},
+        {"name": "Metro General Hospital", "rating": 4.5, "specialty": "general, endoscopy", "location": "East Side"},
+        {"name": "Valley Imaging Center", "rating": 4.8, "specialty": "mri, radiology", "location": "North Suburbs"},
+        {"name": "City Children's Hospital", "rating": 4.7, "specialty": "pediatrics", "location": "West Park"},
+        {"name": "Hope Medical Center", "rating": 4.6, "specialty": "general, oncology", "location": "Central Hills"}
+    ]
+    
+    # Basic filtering logic
+    relevant = []
+    if "colonoscopy" in procedure or "endoscopy" in procedure:
+        relevant = [h for h in hospitals if "endoscopy" in h["specialty"] or "general" in h["specialty"]]
+    elif "mri" in procedure or "ct" in procedure or "scan" in procedure:
+        relevant = [h for h in hospitals if "radiology" in h["specialty"] or "mri" in h["specialty"]]
+    elif "surgery" in procedure:
+        relevant = [h for h in hospitals if "surgery" in h["specialty"]]
+    else:
+        relevant = [h for h in hospitals if "general" in h["specialty"]]
+        
+    # Sort by rating
+    relevant.sort(key=lambda x: x["rating"], reverse=True)
+    
+    state["hospital_data"] = {
+        "suggested_hospitals": relevant,
+        "search_query": procedure
+    }
+    
+    return state

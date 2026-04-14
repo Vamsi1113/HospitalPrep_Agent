@@ -163,7 +163,7 @@ class LLMClient:
                         {"role": "user", "content": structured_content}
                     ],
                     temperature=0.7,
-                    max_tokens=1000
+                    max_tokens=2048
                 )
                 
                 # Extract the rewritten message
@@ -234,7 +234,7 @@ class LLMClient:
                         {"role": "user", "content": user_content}
                     ],
                     temperature=0.7,
-                    max_tokens=1000
+                    max_tokens=2048
                 )
                 
                 # Extract the generated text

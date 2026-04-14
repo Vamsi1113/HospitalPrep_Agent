@@ -21,7 +21,13 @@ from agent.tools import (
     clinical_briefing_tool,
     patient_message_tool,
     clinician_summary_tool,
-    save_output_tool
+    save_output_tool,
+    conversation_intake_node,
+    voice_input_node,
+    missing_info_detector_node,
+    clarification_agent_node,
+    scheduling_orchestrator_node,
+    hospital_suggestion_node
 )
 
 logger = logging.getLogger(__name__)
@@ -33,54 +39,64 @@ def build_graph(
     llm_client,
     storage
 ) -> StateGraph:
-    """
-    Build the THREE-PHASE LangGraph agent workflow.
-    
-    Graph flow:
-    START → intake → triage → protocol_retrieval → admin_prep → 
-    clinical_briefing → patient_message → clinician_summary → save → END
-    
-    Conditional logic:
-    - If red flags detected, mark for human review
-    - If retrieval unavailable, use fallback rules
-    - If symptoms unclear, could loop back (future enhancement)
-    
-    Args:
-        rules_engine: RulesEngine instance
-        retrieval_service: ProtocolRetrieval instance
-        llm_client: LLMClient instance
-        storage: StorageService instance
-    
-    Returns:
-        Compiled StateGraph ready for execution
-    """
     # Create the graph
     workflow = StateGraph(AgentState)
     
-    # Define nodes for THREE-PHASE workflow
-    workflow.add_node("intake", lambda state: intake_node_tool(state, llm_client))
+    # Define nodes for autonomous workflow
+    workflow.add_node("voice_input", voice_input_node)
+    workflow.add_node("conversation_intake", lambda state: conversation_intake_node(state, llm_client))
+    workflow.add_node("missing_info_detector", missing_info_detector_node)
+    workflow.add_node("clarification_agent", clarification_agent_node)
+    workflow.add_node("process_intake", lambda state: intake_node_tool(state, llm_client))
+    
     workflow.add_node("triage", lambda state: triage_node_tool(state))
     workflow.add_node("protocol_retrieval", lambda state: protocol_retrieval_tool(state, retrieval_service))
     workflow.add_node("admin_prep", lambda state: admin_prep_tool(state, rules_engine))
+    workflow.add_node("hospital_suggestion", hospital_suggestion_node)
+    workflow.add_node("scheduling_orchestrator", scheduling_orchestrator_node)
+    
     workflow.add_node("clinical_briefing", lambda state: clinical_briefing_tool(state, llm_client))
     workflow.add_node("patient_message", lambda state: patient_message_tool(state, llm_client))
     workflow.add_node("clinician_summary", lambda state: clinician_summary_tool(state))
     workflow.add_node("save", lambda state: save_output_tool(state, storage))
     
-    # Define edges (workflow flow)
-    workflow.set_entry_point("intake")
+    # Entry Point
+    workflow.set_entry_point("voice_input")
     
-    # Phase I: Intake → Triage
-    workflow.add_edge("intake", "triage")
+    # Intake flow
+    workflow.add_edge("voice_input", "conversation_intake")
+    workflow.add_edge("conversation_intake", "missing_info_detector")
     
-    # Phase II: Triage → Protocol Retrieval → Admin Prep
+    def confidence_router(state: AgentState):
+        c_score = state.get("conversation_data", {}).get("confidence_score", 1.0)
+        if c_score < 0.8:
+            return "incomplete"
+        return "complete"
+
+    workflow.add_conditional_edges(
+        "missing_info_detector",
+        confidence_router,
+        {
+            "incomplete": "clarification_agent",
+            "complete": "process_intake"
+        }
+    )
+    
+    # If incomplete, we end the current turn expecting the system to resume
+    # at intake when the user replies (effectively "back to intake").
+    workflow.add_edge("clarification_agent", END)
+    
+    # Processed intake -> triage
+    workflow.add_edge("process_intake", "triage")
+    
+    # If complete, proceed to triage -> protocol -> admin prep -> hospital suggestion -> scheduling
     workflow.add_edge("triage", "protocol_retrieval")
     workflow.add_edge("protocol_retrieval", "admin_prep")
+    workflow.add_edge("admin_prep", "hospital_suggestion")
+    workflow.add_edge("hospital_suggestion", "scheduling_orchestrator")
     
-    # Phase III: Admin Prep → Clinical Briefing
-    workflow.add_edge("admin_prep", "clinical_briefing")
-    
-    # Output Generation: Clinical Briefing → Patient Message → Clinician Summary
+    # Output Generation
+    workflow.add_edge("scheduling_orchestrator", "clinical_briefing")
     workflow.add_edge("clinical_briefing", "patient_message")
     workflow.add_edge("patient_message", "clinician_summary")
     
@@ -160,6 +176,9 @@ def run_agent(
             "message_id": final_state.get("saved_record_id"),
             "llm_used": final_state.get("llm_used", False),
             "agent_trace": final_state["metadata"]["steps"],
+            # Clarification specific response
+            "clarification_message": final_state.get("draft_message", ""),
+            "suggested_options": final_state.get("conversation_data", {}).get("suggested_options", {}),
             # Backward compatibility
             "preview": final_state.get("patient_message", "")[:200] if final_state.get("patient_message") else "",
             "full_message": final_state.get("patient_message"),

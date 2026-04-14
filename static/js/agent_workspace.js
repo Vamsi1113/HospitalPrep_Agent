@@ -1,175 +1,486 @@
 /**
- * PrepCare Agent Workspace — JavaScript
- * Carfract CRM dark UI | LangGraph multi-phase agent interface
+ * PrepCare Agent — Multi-Step Wizard JavaScript
+ * Step 1: Intake → Step 2: AI Analysis → Step 3: Confirm → Step 4: Book → Step 5: Results
  */
 
 'use strict';
 
 // ═══════════════════════════════════════════
-// STATE
+// GLOBAL STATE
 // ═══════════════════════════════════════════
-let currentResult    = null;
-let currentOutPane   = 'patient';
-let chatSessionId    = 'session_' + Date.now();
+let currentStep      = 1;
+let intakeSnapshot   = null;   // patient intake data
+let analysisResult   = null;   // /api/analyze response
+let selectedDoctor   = null;   // selected doctor object
+let selectedSlot     = null;   // selected time slot
+let bookingResult    = null;   // /api/book-appointment response
+let currentResPane   = 'patient';
 
-// DOM shortcuts
 const $ = id => document.getElementById(id);
 
 // ═══════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
-    initNav();
-    initForm();
-    initOutputTabs();
-    initSchedule();
-    initChat();
-    initRecovery();
-    initHistoryView();
-    loadHistory();           // sidebar mini history
-    loadFullHistory();       // history view table
-    setMinDateTime();
+    initQuickCases();
+    initAnalyzeBtn();
+    initStep2Actions();
+    initStep3Actions();
+    initResultActions();
+    initVoiceIntake();
+    showStep(1);
 });
 
 // ═══════════════════════════════════════════
-// SIDEBAR NAVIGATION
+// STEP NAVIGATION
 // ═══════════════════════════════════════════
-const VIEW_META = {
-    intake:   { title: 'Patient Intake',          sub: 'Appointment Preparation' },
-    schedule: { title: 'Appointment Scheduling',  sub: 'Slot Management' },
-    chat:     { title: 'Patient Q&A',             sub: 'AI-Powered Chat' },
-    recovery: { title: 'Post-Procedure Recovery', sub: 'Recovery Planning' },
-    history:  { title: 'Case History',            sub: 'Audit Log' },
+const STEP_META = {
+    1: { title: 'Patient Intake',     sub: 'Step 1 of 4 — Describe your symptoms' },
+    2: { title: 'AI Analysis',        sub: 'Step 2 of 4 — Review recommended doctors & slots' },
+    3: { title: 'Confirm Booking',    sub: 'Step 3 of 4 — Review and confirm your selection' },
+    4: { title: 'Booking in Progress',sub: 'Step 4 of 4 — The agent is finalizing your appointment' },
+    5: { title: 'Appointment Ready',  sub: 'Booking confirmed — Your preparation guide is ready' },
 };
 
-function initNav() {
-    document.querySelectorAll('.nav-item').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const view = btn.dataset.view;
-            switchView(view);
-        });
+function showStep(step) {
+    currentStep = step;
+
+    // Hide all panels
+    document.querySelectorAll('.wiz-step-panel').forEach(p => p.classList.remove('active'));
+
+    // Show relevant panel
+    const panelId = step === 4 ? 'panel-step-4-loading' : `panel-step-${step}`;
+    const panel = $(panelId);
+    if (panel) panel.classList.add('active');
+
+    // Update sidebar steps
+    [1,2,3,4].forEach(s => {
+        const nav = $(`step-nav-${s}`);
+        const conn = $(`conn-${s}`);
+        if (!nav) return;
+        nav.classList.remove('active','done');
+        if (s < step || (step === 5 && s <= 4)) {
+            nav.classList.add('done');
+            nav.querySelector('.step-badge').textContent = '✓';
+            if (conn) conn.classList.add('done');
+        } else if (s === step) {
+            nav.classList.add('active');
+            nav.querySelector('.step-badge').textContent = s;
+        } else {
+            nav.querySelector('.step-badge').textContent = s;
+            if (conn) conn.classList.remove('done');
+        }
     });
-}
 
-function switchView(view) {
-    // Update nav active state
-    document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
-    const navBtn = document.querySelector(`.nav-item[data-view="${view}"]`);
-    if (navBtn) navBtn.classList.add('active');
-
-    // Update views
-    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-    const viewEl = $(`view-${view}`);
-    if (viewEl) viewEl.classList.add('active');
+    // Step 5 maps to sidebar step 4 "done"
+    if (step === 5) {
+        const nav4 = $('step-nav-4');
+        if (nav4) { nav4.classList.add('done'); nav4.querySelector('.step-badge').textContent = '✓'; }
+    }
 
     // Update topbar
-    const meta = VIEW_META[view] || {};
-    const topTitle = $('topbar-title');
-    const topSub   = $('topbar-breadcrumb-sub');
-    if (topTitle) topTitle.textContent = meta.title || view;
-    if (topSub)   topSub.textContent   = meta.sub   || '';
-
-    // Refresh on history view
-    if (view === 'history') loadFullHistory();
+    const meta = STEP_META[step] || {};
+    const titleEl = $('wiz-step-title');
+    const subEl   = $('wiz-step-sub');
+    if (titleEl) titleEl.textContent = meta.title || '';
+    if (subEl)   subEl.textContent   = meta.sub   || '';
 }
 
 // ═══════════════════════════════════════════
-// FORM & AGENT EXECUTION
+// STEP 1: INTAKE
 // ═══════════════════════════════════════════
-function initForm() {
-    const form = $('agent-form');
-    if (!form) return;
-
-    form.addEventListener('submit', handleFormSubmit);
-
-    // Sample cases
-    document.querySelectorAll('.case-chip').forEach(btn => {
-        btn.addEventListener('click', () => loadSampleCase(btn.dataset.caseId));
-    });
-
-    // Copy & print
-    $('copy-current-btn')?.addEventListener('click', handleCopy);
-    $('print-btn')?.addEventListener('click', handlePrint);
-
-    // Clear form
-    $('clear-form-btn')?.addEventListener('click', () => {
-        form.reset();
-        showWelcome();
-    });
-}
-
-async function handleFormSubmit(e) {
-    e.preventDefault();
-    setGenerating(true);
-    showLoading();
-    resetPipelineNodes();
-    setBadge('trace-live-badge', 'RUNNING', 'running');
-
-    const formData = new FormData(e.target);
-    const csvList  = v => v ? v.split(',').map(s => s.trim()).filter(Boolean) : [];
-
-    const payload = {
-        patient_name:           formData.get('patient_name'),
-        chief_complaint:        formData.get('chief_complaint'),
-        symptoms_description:   formData.get('symptoms_description') || '',
-        current_medications:    csvList(formData.get('current_medications')),
-        allergies:              csvList(formData.get('allergies')),
-        age_group:              formData.get('age_group') || null,
-        prior_conditions:       csvList(formData.get('prior_conditions')),
-        pregnancy_flag:         false,
-        appointment_type:       formData.get('appointment_type'),
-        procedure:              formData.get('procedure'),
-        clinician_name:         formData.get('clinician_name'),
-        appointment_datetime:   formData.get('appointment_datetime'),
-        channel_preference:     formData.get('channel_preference'),
+function gatherIntake() {
+    const csvList = v => v ? v.split(',').map(s => s.trim()).filter(Boolean) : [];
+    return {
+        patient_name:         $('patient_name')?.value || '',
+        age_group:            $('age_group')?.value || '',
+        chief_complaint:      $('chief_complaint')?.value || '',
+        symptoms_description: $('symptoms_description')?.value || '',
+        current_medications:  csvList($('current_medications')?.value),
+        allergies:            csvList($('allergies')?.value),
+        prior_conditions:     csvList($('prior_conditions')?.value),
+        appointment_type:     $('appointment_type')?.value || '',
+        procedure:            $('procedure')?.value || '',
+        channel_preference:   $('channel_preference')?.value || '',
+        conversational_query: $('conversational_query')?.value || '',
+        input_mode:           $('conversational_query')?.value ? 'voice' : 'text',
     };
+}
 
-    // Animate loading nodes
-    const nodeKeys  = ['lnode-1','lnode-2','lnode-3','lnode-4','lnode-5'];
-    const pipeNodes = ['pnode-validate','pnode-rules','pnode-plan','pnode-enhance','pnode-save'];
-    animateLoadingNodes(nodeKeys, pipeNodes);
+function initAnalyzeBtn() {
+    const btn = $('analyze-btn');
+    if (!btn) return;
+    btn.addEventListener('click', handleAnalyze);
+}
+
+async function handleAnalyze() {
+    const intake = gatherIntake();
+
+    // Require at least a complaint or voice query
+    if (!intake.chief_complaint && !intake.conversational_query && !intake.symptoms_description) {
+        alert('Please describe your symptoms or chief complaint before continuing.');
+        return;
+    }
+
+    // If voice/conversational query, try to extract complaint from it
+    if (!intake.chief_complaint && intake.conversational_query) {
+        intake.chief_complaint = intake.conversational_query;
+    }
+
+    const btn = $('analyze-btn');
+    const origText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<div class="spinner-sm"></div> Analyzing...';
 
     try {
-        const res    = await fetch('/generate', {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify(payload),
+        const res  = await fetch('/api/analyze', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(intake)
         });
-        const result = await res.json();
+        const data = await res.json();
 
-        if (result.error) {
-            showErrors(result.messages || ['An error occurred.']);
-            setBadge('trace-live-badge', 'ERROR', '');
-        } else {
-            currentResult = result;
-            showSuccess(result);
-            insertTraceSteps(result.agent_trace || []);
-            completeAllPipelineNodes(pipeNodes);
-            setBadge('trace-live-badge', 'DONE', 'done');
-            loadHistory();
-            loadFullHistory();
+        if (data.error) {
+            alert('Analysis failed: ' + (data.messages || []).join(' '));
+            return;
         }
+
+        intakeSnapshot = intake;
+        analysisResult = data;
+        renderStep2(data);
+        showStep(2);
+
     } catch (err) {
         console.error(err);
-        showErrors(['Network error — please check your connection.']);
-        setBadge('trace-live-badge', 'ERROR', '');
+        alert('Network error — please check your connection and try again.');
     } finally {
-        setGenerating(false);
-        clearNodeAnimation();
+        btn.disabled = false;
+        btn.innerHTML = origText;
     }
 }
 
 // ═══════════════════════════════════════════
-// SAMPLE CASE LOADER
+// STEP 2: ANALYSIS RESULTS
 // ═══════════════════════════════════════════
+function renderStep2(data) {
+    // Triage banner
+    const triage    = data.triage || {};
+    const urgency   = triage.urgency || 'routine';
+    const specialty = (triage.specialty || 'General').replace(/\b\w/g, c => c.toUpperCase());
+    const redFlags  = triage.red_flags || [];
+
+    // Update topbar urgency tag
+    const urgTag = $('urgency-tag');
+    if (urgTag) {
+        urgTag.className = `urgency-tag ${urgency}`;
+        urgTag.textContent = urgency.charAt(0).toUpperCase() + urgency.slice(1);
+    }
+
+    const icons = { routine: '✅', urgent: '⚡', emergency: '🚨' };
+    const labels = { routine: 'Routine', urgent: 'Urgent', emergency: 'Emergency' };
+    const descs = {
+        routine:   'Your symptoms are suitable for a scheduled appointment.',
+        urgent:    'Your symptoms may require an expedited consultation.',
+        emergency: 'Serious indicators detected — please seek immediate care if worsening.'
+    };
+
+    const bannerContainer = $('triage-banner-container');
+    bannerContainer.innerHTML = `
+        <div class="triage-banner ${urgency}" style="max-width:880px; margin: 0 auto 20px;">
+            <span class="triage-icon">${icons[urgency]}</span>
+            <div class="triage-body">
+                <div class="triage-label">${labels[urgency]} — ${specialty}</div>
+                <div class="triage-desc">${descs[urgency]}${redFlags.length ? ' · ' + redFlags[0] : ''}</div>
+            </div>
+            <span class="triage-spec">${specialty}</span>
+        </div>`;
+
+    // Doctor cards
+    const grid = $('doctors-grid');
+    grid.innerHTML = `<div class="section-heading">Recommended Specialists & Available Slots</div>`;
+
+    const doctors = data.doctors || [];
+    doctors.forEach(doc => {
+        const stars = '★'.repeat(Math.round(doc.rating)) + '☆'.repeat(5 - Math.round(doc.rating));
+        const slotsHtml = (doc.slots || []).slice(0,3).map(s => `
+            <button class="slot-btn" 
+                data-doctor-id="${doc.id}"
+                data-slot-id="${s.slot_id}"
+                data-date="${s.datetime_display}"
+                data-iso="${s.datetime_iso}"
+                data-duration="${s.duration}"
+                data-location="${s.location}"
+                onclick="selectSlot(this, ${JSON.stringify(doc).replace(/"/g,"&quot;")})">
+                📅 ${s.datetime_display} · ${s.duration}
+            </button>`).join('');
+
+        const card = document.createElement('div');
+        card.className = 'doctor-card';
+        card.id = `doc-card-${doc.id}`;
+        card.innerHTML = `
+            <div class="doc-header">
+                <div class="doc-avatar">${doc.image_initial || doc.name[0]}</div>
+                <div>
+                    <div class="doc-name">${doc.name}</div>
+                    <div class="doc-spec">${doc.specialty}</div>
+                </div>
+            </div>
+            <div class="doc-meta">
+                <span class="doc-pill star">⭐ ${doc.rating}/5</span>
+                <span class="doc-pill hosp">🏥 ${doc.hospital}</span>
+                <span class="doc-pill">📍 ${doc.hospital_location}</span>
+                <span class="doc-pill">🩺 ${doc.experience}</span>
+            </div>
+            <div class="slots-section">
+                <div class="slots-label">Available Slots</div>
+                <div class="slots-grid" id="slots-${doc.id}">${slotsHtml}</div>
+            </div>`;
+        grid.appendChild(card);
+    });
+
+    selectedDoctor = null;
+    selectedSlot   = null;
+    $('confirm-selection-btn').disabled = true;
+}
+
+window.selectSlot = function(btn, doctor) {
+    // Deselect all slots
+    document.querySelectorAll('.slot-btn').forEach(b => b.classList.remove('selected'));
+    document.querySelectorAll('.doctor-card').forEach(c => c.classList.remove('selected'));
+
+    // Select this slot + card
+    btn.classList.add('selected');
+    const card = $(`doc-card-${doctor.id}`);
+    if (card) card.classList.add('selected');
+
+    selectedDoctor = doctor;
+    selectedSlot = {
+        slot_id:          btn.dataset.slotId,
+        datetime_display: btn.dataset.date,
+        datetime_iso:     btn.dataset.iso,
+        duration:         btn.dataset.duration,
+        location:         btn.dataset.location,
+    };
+
+    $('confirm-selection-btn').disabled = false;
+};
+
+function initStep2Actions() {
+    $('back-to-1')?.addEventListener('click', () => {
+        $('urgency-tag').className = 'urgency-tag';
+        showStep(1);
+    });
+    $('confirm-selection-btn')?.addEventListener('click', () => {
+        if (!selectedDoctor || !selectedSlot) return;
+        renderStep3();
+        showStep(3);
+    });
+}
+
+// ═══════════════════════════════════════════
+// STEP 3: CONFIRM
+// ═══════════════════════════════════════════
+function renderStep3() {
+    const d = selectedDoctor;
+    const s = selectedSlot;
+    const patientName = intakeSnapshot?.patient_name || 'Patient';
+
+    const rows = [
+        { icon: '👤', key: 'Patient Name',  val: patientName },
+        { icon: '👨‍⚕️', key: 'Doctor',        val: d.name },
+        { icon: '🩺', key: 'Specialty',     val: d.specialty },
+        { icon: '🏥', key: 'Hospital',       val: `${d.hospital}, ${d.hospital_location}` },
+        { icon: '📅', key: 'Date & Time',    val: s.datetime_display },
+        { icon: '⏱',  key: 'Duration',      val: s.duration },
+        { icon: '📍', key: 'Location',       val: s.location },
+        { icon: '💬', key: 'Chief Complaint', val: intakeSnapshot?.chief_complaint || intakeSnapshot?.conversational_query || '—' },
+    ];
+
+    $('confirm-body').innerHTML = rows.map(r => `
+        <div class="confirm-row">
+            <div class="confirm-icon" style="font-size:18px;">${r.icon}</div>
+            <div>
+                <div class="confirm-key">${r.key}</div>
+                <div class="confirm-val">${r.val}</div>
+            </div>
+        </div>`).join('');
+}
+
+function initStep3Actions() {
+    $('back-to-2')?.addEventListener('click', () => showStep(2));
+    $('book-btn')?.addEventListener('click', handleBooking);
+}
+
+// ═══════════════════════════════════════════
+// STEP 4: BOOKING + AGENT RUN
+// ═══════════════════════════════════════════
+async function handleBooking() {
+    const btn = $('book-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<div class="spinner-sm"></div> Booking...';
+
+    showStep(4);
+    animateBookingSteps();
+
+    try {
+        const payload = {
+            intake_data:     intakeSnapshot,
+            selected_doctor: selectedDoctor,
+            selected_slot:   selectedSlot,
+        };
+
+        const res  = await fetch('/api/book-appointment', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+
+        if (data.error) {
+            // Show error and go back to step 3
+            showStep(3);
+            alert('Booking failed: ' + (data.messages || []).join(' '));
+            btn.disabled = false;
+            btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Confirm & Book Appointment';
+            return;
+        }
+
+        bookingResult = data;
+        setTimeout(() => {
+            renderResults(data);
+            showStep(5);
+        }, 1000); // small pause so user sees "done" state
+
+    } catch (err) {
+        console.error(err);
+        showStep(3);
+        alert('Network error — please try again.');
+        btn.disabled = false;
+    }
+}
+
+function animateBookingSteps() {
+    const steps = ['bstep-1','bstep-2','bstep-3','bstep-4','bstep-5'];
+    steps.forEach(id => {
+        const el = $(id);
+        if (el) el.className = 'booking-step-row';
+    });
+    let i = 0;
+    const interval = setInterval(() => {
+        if (i > 0 && steps[i-1]) $(steps[i-1])?.classList.add('done');
+        if (i < steps.length) {
+            $(steps[i])?.classList.add('active');
+            i++;
+        } else {
+            clearInterval(interval);
+        }
+    }, 900);
+}
+
+// ═══════════════════════════════════════════
+// STEP 5: RESULTS
+// ═══════════════════════════════════════════
+function renderResults(data) {
+    const booking = data.booking || {};
+
+    // Confirmation banner
+    $('bc-id').textContent = booking.confirmation_id || 'PREPCARE-CONFIRMED';
+    $('bc-details').innerHTML = `
+        <div class="bc-detail-item">
+            <div class="bc-detail-label">Doctor</div>
+            <div class="bc-detail-val">${booking.doctor_name || '—'}</div>
+        </div>
+        <div class="bc-detail-item">
+            <div class="bc-detail-label">Hospital</div>
+            <div class="bc-detail-val">${booking.hospital || '—'}</div>
+        </div>
+        <div class="bc-detail-item">
+            <div class="bc-detail-label">Date & Time</div>
+            <div class="bc-detail-val">${booking.date_time || '—'}</div>
+        </div>`;
+
+    // Patient prep
+    const prepContent = $('patient-prep-output');
+    if (prepContent) {
+        prepContent.textContent = data.patient_message || 'No preparation guide generated.';
+    }
+
+    // Clinician brief
+    const clinContent = $('clinician-brief-output');
+    if (clinContent) {
+        clinContent.textContent = data.clinician_summary || 'No clinical briefing available.';
+    }
+}
+
+// ═══════════════════════════════════════════
+// RESULTS TABS + ACTIONS
+// ═══════════════════════════════════════════
+function initResultActions() {
+    // Tabs
+    document.querySelectorAll('.res-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.res-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.res-pane').forEach(p => p.classList.remove('active'));
+            tab.classList.add('active');
+            const pane = $(`res-${tab.dataset.res}`);
+            if (pane) pane.classList.add('active');
+            currentResPane = tab.dataset.res;
+        });
+    });
+
+    // Copy
+    $('copy-btn')?.addEventListener('click', () => {
+        const text = currentResPane === 'patient'
+            ? ($('patient-prep-output')?.textContent || '')
+            : ($('clinician-brief-output')?.textContent || '');
+        navigator.clipboard.writeText(text).then(() => {
+            const btn = $('copy-btn');
+            const orig = btn.textContent;
+            btn.textContent = '✓ Copied!';
+            setTimeout(() => btn.textContent = orig, 1500);
+        });
+    });
+
+    // Print
+    $('print-res-btn')?.addEventListener('click', () => window.print());
+
+    // New patient
+    $('new-case-btn')?.addEventListener('click', resetWizard);
+}
+
+function resetWizard() {
+    intakeSnapshot  = null;
+    analysisResult  = null;
+    selectedDoctor  = null;
+    selectedSlot    = null;
+    bookingResult   = null;
+
+    // Clear form
+    ['patient_name','age_group','chief_complaint','symptoms_description',
+     'current_medications','allergies','prior_conditions','appointment_type',
+     'procedure','channel_preference','conversational_query'].forEach(id => {
+        const el = $(id);
+        if (el) el.value = '';
+    });
+
+    $('urgency-tag').className = 'urgency-tag';
+    showStep(1);
+}
+
+// ═══════════════════════════════════════════
+// QUICK CASES
+// ═══════════════════════════════════════════
+function initQuickCases() {
+    document.querySelectorAll('.q-chip').forEach(chip => {
+        chip.addEventListener('click', () => loadSampleCase(chip.dataset.caseId));
+    });
+}
+
 async function loadSampleCase(caseId) {
     try {
         const res  = await fetch(`/load-sample-case/${caseId}`);
         const data = await res.json();
-        if (data.error) { alert('Failed to load sample case'); return; }
+        if (data.error) { return; }
 
         const set = (id, val) => { const el = $(id); if (el) el.value = val || ''; };
-
         set('patient_name',           data.name);
         set('chief_complaint',        data.chief_complaint);
         set('symptoms_description',   data.symptoms_description);
@@ -179,679 +490,154 @@ async function loadSampleCase(caseId) {
         set('prior_conditions',       (data.prior_conditions || []).join(', '));
         set('appointment_type',       data.appointment_type);
         set('procedure',              data.procedure);
-        set('clinician_name',         data.clinician_name);
-        set('appointment_datetime',   data.appointment_datetime);
         set('channel_preference',     data.channel_preference);
+        $('conversational_query').value = '';
     } catch (err) {
-        console.error(err);
-        alert('Failed to load sample case');
+        console.error('Failed to load sample case:', err);
     }
 }
 
 // ═══════════════════════════════════════════
-// UI STATE TRANSITIONS
+// VOICE INTAKE
 // ═══════════════════════════════════════════
-function showWelcome() {
-    hideAllOutputStates();
-    const ws = $('welcome-state');
-    if (ws) ws.style.display = '';
-}
+let audioContext = null;
+let processor    = null;
+let inputSource  = null;
+let isRecording  = false;
 
-function showLoading() {
-    hideAllOutputStates();
-    const ls = $('loading-state');
-    if (ls) ls.style.display = '';
-}
+function initVoiceIntake() {
+    const micBtn = $('mic-btn');
+    if (!micBtn) return;
 
-function showErrors(messages) {
-    hideAllOutputStates();
-    const es = $('error-state');
-    if (!es) return;
-    const el = $('error-messages');
-    if (el) {
-        el.innerHTML = '<ul>' + messages.map(m => `<li>${escHtml(m)}</li>`).join('') + '</ul>';
-    }
-    es.style.display = '';
-}
-
-function showSuccess(result) {
-    hideAllOutputStates();
-    const ss = $('success-state');
-    if (!ss) return;
-
-    renderPatientPrep(result.patient_message);
-    renderClinicianSummary(result.clinician_summary);
-
-    ss.style.display = '';
-    // Show patient pane by default
-    switchOutPane('patient');
-}
-
-function hideAllOutputStates() {
-    ['welcome-state','loading-state','error-state','success-state'].forEach(id => {
-        const el = $(id);
-        if (el) el.style.display = 'none';
-    });
-}
-
-// ═══════════════════════════════════════════
-// OUTPUT RENDERING
-// ═══════════════════════════════════════════
-function renderPatientPrep(msg) {
-    const container = $('patient-prep-content');
-    if (!container) return;
-
-    if (!msg) {
-        container.innerHTML = '<p class="trace-empty">No patient prep message available.</p>';
+    if (!window.isSecureContext) {
+        micBtn.title = 'Microphone requires HTTPS or localhost';
+        micBtn.addEventListener('click', () =>
+            alert('Microphone access requires http://localhost or HTTPS.'));
         return;
     }
 
-    // Parse message into sections
-    const sections = parseMessageSections(msg);
-    container.innerHTML = sections.map(renderSection).join('');
+    micBtn.addEventListener('click', toggleRecording);
 }
 
-function parseMessageSections(text) {
-    const lines    = text.split('\n');
-    const sections = [];
-    let current    = null;
-
-    for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) { if (current) current.body += '\n'; continue; }
-
-        // Detect section headers (ALL CAPS followed by colon, or emoji lines)
-        const isHeader = /^[A-Z][A-Z\s&-]{3,}:/.test(trimmed) || /^[📋🍽️💊🎒🕐🚗⚠️🌟✅🏥]+/.test(trimmed);
-
-        if (isHeader) {
-            if (current) sections.push(current);
-            current = { title: trimmed, body: '', type: detectSectionType(trimmed) };
-        } else if (current) {
-            current.body += (current.body ? '\n' : '') + trimmed;
-        } else {
-            current = { title: '', body: trimmed, type: 'default' };
-        }
-    }
-    if (current) sections.push(current);
-    return sections.filter(s => s.body || s.title);
+async function toggleRecording() {
+    isRecording ? stopRecording() : await startRecording();
 }
 
-function detectSectionType(title) {
-    const t = title.toUpperCase();
-    if (/WARNING|URGENT|IMPORTANT|⚠️/.test(t))      return 'warning';
-    if (/SUMMARY|APPOINTMENT/.test(t))               return 'info';
-    if (/CLOSING|CONTACT|NOTE|✅/.test(t))           return 'success';
-    return 'default';
-}
-
-function renderSection(sec) {
-    const cls = sec.type !== 'default' ? ` msg-section--${sec.type}` : '';
-    const bodyHtml = formatBodyText(sec.body);
-    return `
-    <div class="msg-section${cls}">
-        ${sec.title ? `<div class="msg-section-title">${escHtml(sec.title)}</div>` : ''}
-        <div class="msg-section-body">${bodyHtml}</div>
-    </div>`;
-}
-
-function formatBodyText(text) {
-    if (!text) return '';
-    return text.split('\n').map(line => {
-        const t = line.trim();
-        if (!t) return '';
-        if (t.startsWith('•') || t.startsWith('-') || t.startsWith('*')) {
-            return `<div style="padding-left:12px; position:relative; margin:2px 0;">
-                <span style="position:absolute;left:0;color:var(--accent)">•</span>
-                ${escHtml(t.replace(/^[•\-\*]\s*/, ''))}
-            </div>`;
-        }
-        if (/⚠️/.test(t)) {
-            return `<div class="warning-line">${escHtml(t)}</div>`;
-        }
-        return `<div style="margin:2px 0;">${escHtml(t)}</div>`;
-    }).join('');
-}
-
-function renderClinicianSummary(summary) {
-    const container = $('clinician-summary-content');
-    if (!container) return;
-    if (!summary) {
-        container.innerHTML = '<p class="trace-empty">No clinician summary available.</p>';
-        return;
-    }
-    container.innerHTML = `<pre style="white-space:pre-wrap;font-size:11.5px;line-height:1.65;color:var(--text-muted);">${escHtml(summary)}</pre>`;
-}
-
-// ═══════════════════════════════════════════
-// OUTPUT TABS
-// ═══════════════════════════════════════════
-function initOutputTabs() {
-    document.querySelectorAll('.out-tab[data-out]').forEach(btn => {
-        btn.addEventListener('click', () => switchOutPane(btn.dataset.out));
-    });
-}
-
-function switchOutPane(pane) {
-    currentOutPane = pane;
-    document.querySelectorAll('.out-tab[data-out]').forEach(b => {
-        b.classList.toggle('active', b.dataset.out === pane);
-    });
-    document.querySelectorAll('.out-pane').forEach(p => {
-        p.classList.toggle('active', p.id === `pane-${pane}`);
-    });
-}
-
-// ═══════════════════════════════════════════
-// COPY & PRINT
-// ═══════════════════════════════════════════
-function handleCopy() {
-    if (!currentResult) return;
-    const text = currentOutPane === 'patient'
-        ? (currentResult.patient_message || '')
-        : (currentResult.clinician_summary || '');
-
-    if (!text) { alert('Nothing to copy.'); return; }
-
-    navigator.clipboard.writeText(text).then(() => {
-        const btn = $('copy-current-btn');
-        if (!btn) return;
-        const orig = btn.innerHTML;
-        btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>`;
-        setTimeout(() => { btn.innerHTML = orig; }, 2000);
-    }).catch(() => alert('Failed to copy'));
-}
-
-function handlePrint() {
-    if (!currentResult) return;
-    const text = currentOutPane === 'patient'
-        ? (currentResult.patient_message || '')
-        : (currentResult.clinician_summary || '');
-    const win = window.open('', '_blank');
-    win.document.write(`<pre style="font-family:system-ui;white-space:pre-wrap;padding:24px;">${text}</pre>`);
-    win.document.close();
-    win.print();
-}
-
-// ═══════════════════════════════════════════
-// PIPELINE NODE ANIMATION
-// ═══════════════════════════════════════════
-const NODE_TO_STEP = {
-    'pnode-validate': 'validate_input',
-    'pnode-rules':    'apply_rules',
-    'pnode-plan':     'build_prep_plan',
-    'pnode-enhance':  'enhance_message',
-    'pnode-save':     'save_output',
-};
-
-let nodeAnimInterval = null;
-
-function animateLoadingNodes(loadingNodeIds, pipelineNodeIds) {
-    let i = 0;
-    loadingNodeIds.forEach(id => {
-        const el = $(id);
-        if (el) el.className = 'lnode';
-    });
-    pipelineNodeIds.forEach(id => setNodeStatus(id, 'idle'));
-
-    nodeAnimInterval = setInterval(() => {
-        if (i > 0) {
-            const el = $(loadingNodeIds[i - 1]);
-            if (el) el.className = 'lnode done';
-            setNodeStatus(pipelineNodeIds[i - 1], 'done');
-        }
-        if (i < loadingNodeIds.length) {
-            const el = $(loadingNodeIds[i]);
-            if (el) el.className = 'lnode active';
-            setNodeStatus(pipelineNodeIds[i], 'active');
-            i++;
-        } else {
-            clearNodeAnimation();
-        }
-    }, 700);
-}
-
-function clearNodeAnimation() {
-    if (nodeAnimInterval) {
-        clearInterval(nodeAnimInterval);
-        nodeAnimInterval = null;
-    }
-}
-
-function resetPipelineNodes() {
-    Object.keys(NODE_TO_STEP).forEach(id => setNodeStatus(id, 'idle'));
-    ['pnode-validate','pnode-rules','pnode-plan','pnode-enhance','pnode-save'].forEach(id => {
-        const node = $(id);
-        if (node) {
-            node.querySelector('.pnode-meta').textContent = META_DEFAULT[id] || '';
-        }
-    });
-}
-
-const META_DEFAULT = {
-    'pnode-validate': 'Awaiting input',
-    'pnode-rules':    'Deterministic engine',
-    'pnode-plan':     'Structured sections',
-    'pnode-enhance':  'LLM tone rewrite',
-    'pnode-save':     'SQLite persistence',
-};
-
-function setNodeStatus(nodeId, status) {
-    const el = $(nodeId);
-    if (el) el.dataset.status = status;
-}
-
-function completeAllPipelineNodes(pipelineNodeIds) {
-    pipelineNodeIds.forEach(id => setNodeStatus(id, 'done'));
-    ['lnode-1','lnode-2','lnode-3','lnode-4','lnode-5'].forEach(id => {
-        const el = $(id);
-        if (el) el.className = 'lnode done';
-    });
-}
-
-// ═══════════════════════════════════════════
-// REASONING TRACE
-// ═══════════════════════════════════════════
-function insertTraceSteps(steps) {
-    const container = $('reasoning-trace');
-    if (!container) return;
-
-    if (!steps || steps.length === 0) {
-        container.innerHTML = '<p class="trace-empty">No trace data returned.</p>';
-        return;
-    }
-
-    container.innerHTML = steps.map((step, idx) => {
-        const phaseNum = step.phase || Math.min(Math.floor(idx / 2) + 1, 3);
-        const cls      = `trace-step trace-step--phase${phaseNum}`;
-        const metaTags = buildMetaTags(step);
-
-        return `
-        <div class="${cls}">
-            <div class="trace-step-name">${escHtml(step.step || 'step')}</div>
-            <div class="trace-step-desc">${escHtml(step.description || '')}</div>
-            ${metaTags ? `<div class="trace-step-meta">${metaTags}</div>` : ''}
-            <div class="trace-step-time">${formatTs(step.timestamp)}</div>
-        </div>`;
-    }).join('');
-}
-
-function buildMetaTags(step) {
-    const skip = new Set(['step','description','timestamp','phase']);
-    return Object.entries(step)
-        .filter(([k]) => !skip.has(k))
-        .slice(0, 5)
-        .map(([k, v]) => `<span class="trace-meta-tag">${escHtml(k)}: ${escHtml(String(v))}</span>`)
-        .join('');
-}
-
-// ═══════════════════════════════════════════
-// HISTORY (SIDEBAR MINI)
-// ═══════════════════════════════════════════
-async function loadHistory() {
-    const container = $('history-list');
-    if (!container) return;
-
+async function startRecording() {
     try {
-        const res    = await fetch('/history?limit=8');
-        const result = await res.json();
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const hasMic  = devices.some(d => d.kind === 'audioinput');
+        if (!hasMic) throw new Error('No microphone detected on this system.');
 
-        if (result.error || !result.history || result.history.length === 0) {
-            container.innerHTML = '<p class="trace-empty">No cases yet</p>';
-            return;
-        }
+        const stream  = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioContext  = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+        inputSource   = audioContext.createMediaStreamSource(stream);
+        processor     = audioContext.createScriptProcessor(4096, 1, 1);
 
-        container.innerHTML = result.history.map(item => {
-            const initials = getInitials(item.patient_name);
-            return `
-            <div class="history-row" title="${escHtml(item.patient_name)} — ${escHtml(item.procedure)}">
-                <div class="history-row-avatar">${initials}</div>
-                <div class="history-row-info">
-                    <div class="history-row-name">${escHtml(item.patient_name)}</div>
-                    <div class="history-row-meta">${escHtml(item.procedure || '')} · ${formatTs(item.created_at)}</div>
-                </div>
-            </div>`;
-        }).join('');
+        const leftChannel = [];
+        processor.onaudioprocess = e => leftChannel.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+        inputSource.connect(processor);
+        processor.connect(audioContext.destination);
+
+        isRecording = true;
+        setRecordingUI(true);
+
+        window._stopRec = async () => {
+            processor.disconnect();
+            inputSource.disconnect();
+            stream.getTracks().forEach(t => t.stop());
+            await sendAudioToBackend(exportWAV(leftChannel, 16000));
+        };
     } catch (err) {
-        console.error(err);
-        container.innerHTML = '<p class="trace-empty">Failed to load</p>';
+        const msg = err.name === 'NotAllowedError'
+            ? 'Microphone access denied. Click the lock icon in your browser URL bar and allow microphone access.'
+            : 'Could not access microphone: ' + err.message;
+        alert(msg);
     }
 }
 
-// ═══════════════════════════════════════════
-// HISTORY VIEW (full table)
-// ═══════════════════════════════════════════
-function initHistoryView() {
-    $('refresh-history-btn')?.addEventListener('click', loadFullHistory);
+function stopRecording() {
+    if (window._stopRec) { window._stopRec(); window._stopRec = null; }
+    isRecording = false;
+    setRecordingUI(false);
 }
 
-async function loadFullHistory() {
-    const container = $('history-full-list');
-    const countEl   = $('history-count');
-    if (!container) return;
+function setRecordingUI(active) {
+    const btn    = $('mic-btn');
+    const status = $('recording-status');
+    const text   = $('rec-status-text');
+    if (active) {
+        btn?.classList.add('recording');
+        if (status) status.style.display = 'flex';
+        if (text)   text.textContent = 'Listening...';
+    } else {
+        btn?.classList.remove('recording');
+        if (status) status.style.display = 'none';
+    }
+}
+
+async function sendAudioToBackend(blob) {
+    const status = $('recording-status');
+    const text   = $('rec-status-text');
+    if (status) { status.style.display = 'flex'; }
+    if (text)   text.textContent = 'Transcribing...';
+
+    const formData = new FormData();
+    formData.append('audio', blob, 'recording.wav');
 
     try {
-        const res    = await fetch('/history?limit=50');
-        const result = await res.json();
-
-        if (result.error || !result.history || result.history.length === 0) {
-            container.innerHTML = '<p class="trace-empty" style="padding:20px;">No history yet.</p>';
-            if (countEl) countEl.textContent = '0 records';
-            return;
-        }
-
-        const items = result.history;
-        if (countEl) countEl.textContent = `${items.length} record${items.length !== 1 ? 's' : ''}`;
-
-        container.innerHTML = items.map(item => {
-            const typeClass = getTypeBadgeClass(item.appointment_type);
-            return `
-            <div class="history-table-row">
-                <span>${escHtml(item.patient_name || '—')}</span>
-                <span>${escHtml(item.procedure || '—')}</span>
-                <span><span class="history-badge ${typeClass}">${escHtml(item.appointment_type || '—')}</span></span>
-                <span>${formatTs(item.created_at)}</span>
-            </div>`;
-        }).join('');
-    } catch (err) {
-        console.error(err);
-        container.innerHTML = '<p class="trace-empty" style="padding:20px;">Failed to load history.</p>';
-    }
-}
-
-function getTypeBadgeClass(type) {
-    const map = {
-        'Surgery':     'history-badge--surgery',
-        'Imaging':     'history-badge--imaging',
-        'Lab Work':    'history-badge--lab',
-        'Consultation':'history-badge--consult',
-        'Procedure':   'history-badge--procedure',
-    };
-    return map[type] || 'history-badge--default';
-}
-
-// ═══════════════════════════════════════════
-// SCHEDULING FEATURE
-// ═══════════════════════════════════════════
-function initSchedule() {
-    $('get-slots-btn')?.addEventListener('click', fetchSlots);
-}
-
-async function fetchSlots() {
-    const type      = $('schedule-type')?.value;
-    const container = $('slots-container');
-    if (!container) return;
-
-    container.innerHTML = '<p class="trace-empty" style="padding:12px;">Searching for slots...</p>';
-
-    try {
-        const res    = await fetch('/api/slots', {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ appointment_type: type }),
-        });
-        const result = await res.json();
-
-        if (result.error) {
-            container.innerHTML = `<p class="trace-empty" style="color:var(--danger);padding:12px;">Error: ${escHtml((result.messages || []).join(', '))}</p>`;
-            return;
-        }
-
-        renderSlots(result.slots || []);
-    } catch (err) {
-        console.error(err);
-        container.innerHTML = '<p class="trace-empty" style="color:var(--danger);padding:12px;">Failed to fetch slots.</p>';
-    }
-}
-
-function renderSlots(slots) {
-    const container = $('slots-container');
-    if (!container) return;
-
-    if (!slots.length) {
-        container.innerHTML = '<p class="trace-empty" style="padding:12px;">No available slots found.</p>';
-        return;
-    }
-
-    container.innerHTML = slots.map(slot => `
-    <div class="slot-card">
-        <div>
-            <div class="slot-time">${escHtml(slot.start_formatted)}</div>
-            <div class="slot-doctor">${escHtml(slot.doctor)}</div>
-        </div>
-        <div class="slot-location">${escHtml(slot.location)}</div>
-        <button class="btn-book" data-slot='${JSON.stringify(slot).replace(/'/g, '&apos;')}'>Book</button>
-    </div>`).join('');
-
-    container.querySelectorAll('.btn-book').forEach(btn => {
-        btn.addEventListener('click', () => {
-            try { bookSlot(JSON.parse(btn.dataset.slot)); }
-            catch(e) { console.error(e); }
-        });
-    });
-}
-
-async function bookSlot(slot) {
-    const patientName = prompt('Enter patient name:');
-    if (!patientName) return;
-
-    try {
-        const res    = await fetch('/api/book', {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({
-                slot,
-                patient_name:     patientName,
-                appointment_type: $('schedule-type')?.value || 'Consultation',
-                procedure:        'General Appointment',
-            }),
-        });
-        const result = await res.json();
-
-        if (result.error) { alert('Booking failed: ' + (result.messages || []).join(', ')); return; }
-
-        $('slots-container').style.display = 'none';
-        const conf = $('booking-confirmation');
-        if (conf) {
-            $('booking-details').textContent = `Booked for ${patientName} on ${slot.start_formatted}`;
-            conf.style.display = 'flex';
-            setTimeout(() => { conf.style.display = 'none'; $('slots-container').style.display = ''; }, 6000);
+        const res  = await fetch('/api/transcribe', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (data.text) {
+            const area = $('conversational_query');
+            if (area) {
+                area.value = (area.value ? area.value + ' ' : '') + data.text;
+            }
+        } else if (data.error) {
+            alert('Transcription failed: ' + (data.messages || []).join(' '));
         }
     } catch (err) {
-        console.error(err);
-        alert('Failed to book appointment.');
+        console.error('Transcription network error:', err);
+    } finally {
+        if (status) status.style.display = 'none';
     }
 }
 
-// ═══════════════════════════════════════════
-// CHAT FEATURE
-// ═══════════════════════════════════════════
-function initChat() {
-    $('chat-send-btn')?.addEventListener('click', sendChatMessage);
-    $('chat-input')?.addEventListener('keydown', e => {
-        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
-    });
-}
-
-async function sendChatMessage() {
-    const input    = $('chat-input');
-    if (!input) return;
-    const question = input.value.trim();
-    if (!question) return;
-
-    addChatBubble('patient', question);
-    input.value = '';
-
-    // Typing indicator
-    const typingId = addTypingIndicator();
-
-    try {
-        const res    = await fetch('/api/chat', {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({
-                question,
-                session_id:       chatSessionId,
-                appointment_type: 'General',
-                procedure:        'General',
-            }),
-        });
-        const result = await res.json();
-        removeTypingIndicator(typingId);
-
-        addChatBubble('agent', result.error ? 'Sorry, I encountered an error. Please try again.' : result.response);
-    } catch (err) {
-        console.error(err);
-        removeTypingIndicator(typingId);
-        addChatBubble('agent', 'Sorry, I encountered a network error. Please try again.');
+// WAV ENCODER
+function exportWAV(chunks, sampleRate) {
+    const buffer   = flatten(chunks);
+    const dataview = new DataView(new ArrayBuffer(44 + buffer.length * 2));
+    writeString(dataview, 0, 'RIFF');
+    dataview.setUint32(4, 36 + buffer.length * 2, true);
+    writeString(dataview, 8, 'WAVE');
+    writeString(dataview, 12, 'fmt ');
+    dataview.setUint32(16, 16, true);
+    dataview.setUint16(20, 1, true);
+    dataview.setUint16(22, 1, true);
+    dataview.setUint32(24, sampleRate, true);
+    dataview.setUint32(28, sampleRate * 2, true);
+    dataview.setUint16(32, 2, true);
+    dataview.setUint16(34, 16, true);
+    writeString(dataview, 36, 'data');
+    dataview.setUint32(40, buffer.length * 2, true);
+    let offset = 44;
+    for (let i = 0; i < buffer.length; i++, offset += 2) {
+        const s = Math.max(-1, Math.min(1, buffer[i]));
+        dataview.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
     }
+    return new Blob([dataview], { type: 'audio/wav' });
 }
 
-function addChatBubble(role, content) {
-    const container = $('chat-messages');
-    if (!container) return;
-
-    const div = document.createElement('div');
-    div.className = `chat-message chat-${role}`;
-
-    const avatarHtml = role === 'agent'
-        ? `<div class="msg-avatar msg-avatar--agent"><svg width="12" height="12" viewBox="0 0 24 24" fill="#7c6af7"><path d="M12 2L2 7L12 12L22 7L12 2Z"/></svg></div>`
-        : `<div class="msg-avatar msg-avatar--patient">👤</div>`;
-
-    div.innerHTML = `
-        ${avatarHtml}
-        <div class="msg-bubble msg-bubble--${role}">${escHtml(content)}</div>
-    `;
-
-    container.appendChild(div);
-    container.scrollTop = container.scrollHeight;
+function flatten(chunks) {
+    let length = 0;
+    chunks.forEach(c => length += c.length);
+    const result = new Float32Array(length);
+    let offset = 0;
+    chunks.forEach(c => { result.set(c, offset); offset += c.length; });
+    return result;
 }
 
-function addTypingIndicator() {
-    const container = $('chat-messages');
-    if (!container) return null;
-    const id  = 'typing-' + Date.now();
-    const div = document.createElement('div');
-    div.id        = id;
-    div.className = 'chat-message chat-agent';
-    div.innerHTML = `
-        <div class="msg-avatar msg-avatar--agent"><svg width="12" height="12" viewBox="0 0 24 24" fill="#7c6af7"><path d="M12 2L2 7L12 12L22 7L12 2Z"/></svg></div>
-        <div class="msg-bubble msg-bubble--agent" style="color:var(--text-disabled);">Thinking<span style="animation:fade-in-out 1.2s infinite">...</span></div>`;
-    container.appendChild(div);
-    container.scrollTop = container.scrollHeight;
-    return id;
-}
-
-function removeTypingIndicator(id) {
-    if (!id) return;
-    const el = $(id);
-    if (el) el.remove();
-}
-
-// ═══════════════════════════════════════════
-// RECOVERY FEATURE
-// ═══════════════════════════════════════════
-function initRecovery() {
-    $('get-recovery-btn')?.addEventListener('click', fetchRecoveryPlan);
-}
-
-async function fetchRecoveryPlan() {
-    const procedure = $('recovery-procedure')?.value;
-    const container = $('recovery-plan');
-    if (!container) return;
-
-    container.innerHTML = '<p class="trace-empty">Generating recovery plan...</p>';
-
-    try {
-        const res    = await fetch('/api/post-procedure', {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ procedure, patient_name: 'Patient' }),
-        });
-        const result = await res.json();
-
-        if (result.error) {
-            container.innerHTML = `<p class="trace-empty" style="color:var(--danger);">Error: ${escHtml((result.messages || []).join(', '))}</p>`;
-            return;
-        }
-
-        renderRecoveryPlan(result.recovery_plan);
-    } catch (err) {
-        console.error(err);
-        container.innerHTML = '<p class="trace-empty" style="color:var(--danger);">Failed to generate recovery plan.</p>';
-    }
-}
-
-function renderRecoveryPlan(plan) {
-    const container = $('recovery-plan');
-    if (!container || !plan) return;
-
-    const restrictionsHtml = (plan.activity_restrictions?.length)
-        ? `<h4>Activity Restrictions</h4><ul>${plan.activity_restrictions.map(r => `<li>${escHtml(r)}</li>`).join('')}</ul>`
-        : '';
-
-    const warningsHtml = (plan.warning_signs?.length)
-        ? `<h4 class="warning-header">⚠️ Warning Signs — Call Doctor If:</h4>
-           <ul class="warning-list">${plan.warning_signs.map(s => `<li>${escHtml(s)}</li>`).join('')}</ul>`
-        : '';
-
-    container.innerHTML = `
-    <div class="recovery-content">
-        <h3>Recovery Instructions</h3>
-        <pre>${escHtml(plan.instructions || '')}</pre>
-        ${restrictionsHtml}
-        ${warningsHtml}
-    </div>`;
-}
-
-// ═══════════════════════════════════════════
-// BUTTON & BADGE HELPERS
-// ═══════════════════════════════════════════
-function setGenerating(loading) {
-    const btn    = $('generate-btn');
-    const text   = $('btn-text');
-    const spin   = $('btn-spinner');
-    if (!btn) return;
-    btn.disabled          = loading;
-    if (text) text.style.display  = loading ? 'none' : '';
-    if (spin) spin.style.display  = loading ? 'inline-block' : 'none';
-}
-
-function setBadge(id, label, cls) {
-    const el = $(id);
-    if (!el) return;
-    el.textContent = label;
-    el.className   = 'live-badge' + (cls ? ` ${cls}` : '');
-}
-
-// ═══════════════════════════════════════════
-// UTILITIES
-// ═══════════════════════════════════════════
-function escHtml(text) {
-    if (text == null) return '';
-    const d = document.createElement('div');
-    d.textContent = String(text);
-    return d.innerHTML;
-}
-
-function formatTs(ts) {
-    if (!ts) return '';
-    try {
-        return new Date(ts).toLocaleString(undefined, {
-            month: 'short', day: 'numeric',
-            hour: '2-digit', minute: '2-digit',
-        });
-    } catch { return String(ts); }
-}
-
-function getInitials(name) {
-    if (!name) return '?';
-    return name.trim().split(/\s+/).slice(0,2).map(w => w[0]).join('').toUpperCase();
-}
-
-function setMinDateTime() {
-    const dt = $('appointment_datetime');
-    if (!dt) return;
-    const now = new Date();
-    now.setMinutes(now.getMinutes() + 30);
-    dt.min = now.toISOString().slice(0,16);
+function writeString(view, offset, string) {
+    for (let i = 0; i < string.length; i++)
+        view.setUint8(offset + i, string.charCodeAt(i));
 }
