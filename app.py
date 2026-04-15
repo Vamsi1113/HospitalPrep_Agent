@@ -26,6 +26,8 @@ from services.retrieval import ProtocolRetrieval
 from services.calendar_service import CalendarService
 from services.sms_service import SMSService
 from services.email_service import EmailService
+from services.voice_service import VoiceService
+from services.hospital_lookup_service import HospitalLookupService
 from services.context_manager import get_context_manager
 from agent.graph import run_agent
 from agent.prompts import build_chat_prompt
@@ -41,17 +43,20 @@ app = Flask(__name__)
 
 # Load configuration
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
-app.config['OPENROUTER_API_KEY'] = os.getenv('OPENROUTER_API_KEY')
 
 # Initialize services
 rules_engine = RulesEngine()
-llm_client = LLMClient(api_key=app.config['OPENROUTER_API_KEY'])
+# Initialize LLM client with OpenRouter API key
+openrouter_api_key = os.getenv('OPENROUTER_API_KEY')
+llm_client = LLMClient(api_key=openrouter_api_key)
 message_builder = MessageBuilder(llm_client)
 prep_plan_builder = PrepPlanBuilder()
 retrieval_service = ProtocolRetrieval(protocols_dir="data/protocols")
 calendar_service = CalendarService()
 sms_service = SMSService()
 email_service = EmailService()
+voice_service = VoiceService(mock_mode=True)
+hospital_lookup_service = HospitalLookupService(mock_mode=True)
 storage = StorageService()
 
 # Initialize database on startup
@@ -542,214 +547,6 @@ def patient_chat():
         }), 500
 
 
-@app.route('/api/transcribe', methods=['POST'])
-def transcribe_audio():
-    """
-    Transcribe audio from frontend voice recording.
-    Expects a WAV file in the 'audio' field of FormData.
-    """
-    try:
-        if 'audio' not in request.files:
-            return jsonify({"error": True, "messages": ["No audio provided. Please ensure the microphone was recorded."]}), 400
-            
-        file = request.files['audio']
-        
-        recognizer = sr.Recognizer()
-        
-        with sr.AudioFile(file) as source:
-            audio_data = recognizer.record(source)
-            text = recognizer.recognize_google(audio_data)
-            return jsonify({"error": False, "text": text}), 200
-            
-    except sr.UnknownValueError:
-        return jsonify({"error": False, "text": ""}), 200  # No text detected but no hard error
-    except sr.RequestError as e:
-        app.logger.error(f"Speech recognition API error: {e}")
-        return jsonify({"error": True, "messages": ["Speech recognition service is currently unavailable."]}), 503
-    except Exception as e:
-        app.logger.error(f"Transcribe error: {type(e).__name__}: {str(e)}")
-        return jsonify({"error": True, "messages": ["Failed to transcribe audio. Ensure it is a valid WAV format."]}), 500
-
-
-@app.route('/api/analyze', methods=['POST'])
-def analyze_patient():
-    """
-    Step 2 of the agentic flow: Analyze patient intake data.
-    - Triages the symptoms (urgency, red flags)
-    - Generates doctor suggestions based on procedure/complaint
-    - Returns scheduling slots for each suggested doctor
-
-    Expects JSON with patient intake fields.
-    Returns: doctors[], hospital_suggestions[], slots[]
-    """
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({"error": True, "messages": ["No data provided"]}), 400
-
-        complaint = data.get("chief_complaint", "").lower()
-        procedure = data.get("procedure", "").lower()
-        symptoms  = data.get("symptoms_description", "").lower()
-
-        combined = f"{complaint} {procedure} {symptoms}"
-
-        # ── Triage ──────────────────────────────────────────────
-        urgency = "routine"
-        red_flags = []
-        if any(k in combined for k in ["chest pain", "chest tight", "chest pressure", "heart", "cardiac"]):
-            urgency = "urgent"
-            red_flags.append("Potential cardiac symptoms — expedited consult recommended")
-        if any(k in combined for k in ["severe", "emergency", "cannot breathe", "unconscious"]):
-            urgency = "emergency"
-            red_flags.append("Emergency indicators detected — immediate care needed")
-
-        # ── Specialty detection ──────────────────────────────────
-        specialty_map = {
-            "cardiology": ["chest", "heart", "cardiac", "palpitation", "blood pressure"],
-            "gastroenterology": ["colonoscopy", "endoscopy", "stomach", "bowel", "colon", "abdomen"],
-            "radiology": ["mri", "ct scan", "x-ray", "imaging", "scan"],
-            "orthopedics": ["knee", "hip", "bone", "joint", "fracture", "spine"],
-            "neurology": ["headache", "dizziness", "migraine", "nerve", "seizure"],
-            "general medicine": ["checkup", "consultation", "fever", "flu", "general"],
-            "oncology": ["cancer", "tumor", "biopsy", "chemotherapy"],
-            "pulmonology": ["lung", "breathing", "asthma", "cough", "respiratory"],
-        }
-
-        matched_specialty = "general medicine"
-        for specialty, keywords in specialty_map.items():
-            if any(k in combined for k in keywords):
-                matched_specialty = specialty
-                break
-
-        # ── Doctor pool (with scheduling slots) ─────────────────
-        from datetime import timedelta
-        now = datetime.now()
-
-        def slots_for_doctor(doc_id):
-            return [
-                {
-                    "slot_id": f"{doc_id}_slot_{i}",
-                    "datetime_display": (now + timedelta(days=i+1, hours=9)).strftime("%b %d, %Y at %I:%M %p"),
-                    "datetime_iso": (now + timedelta(days=i+1, hours=9)).isoformat(),
-                    "duration": "45 min",
-                    "location": "Main Clinic",
-                    "available": True
-                }
-                for i in range(3)
-            ]
-
-        all_doctors = {
-            "cardiology": [
-                {"id": "dr_001", "name": "Dr. Sarah Johnson", "specialty": "Cardiologist", "rating": 4.9, "hospital": "St. Jude Premier Health", "hospital_rating": 4.9, "hospital_location": "Downtown", "experience": "15 years", "image_initial": "SJ"},
-                {"id": "dr_002", "name": "Dr. Michael Chen", "specialty": "Interventional Cardiologist", "rating": 4.8, "hospital": "Metro Heart Institute", "hospital_rating": 4.7, "hospital_location": "East Side", "experience": "12 years", "image_initial": "MC"},
-            ],
-            "gastroenterology": [
-                {"id": "dr_003", "name": "Dr. Priya Patel", "specialty": "Gastroenterologist", "rating": 4.9, "hospital": "Metro General Hospital", "hospital_rating": 4.5, "hospital_location": "East Side", "experience": "10 years", "image_initial": "PP"},
-                {"id": "dr_004", "name": "Dr. James Wilson", "specialty": "GI Specialist", "rating": 4.7, "hospital": "Hope Medical Center", "hospital_rating": 4.6, "hospital_location": "Central Hills", "experience": "18 years", "image_initial": "JW"},
-            ],
-            "radiology": [
-                {"id": "dr_005", "name": "Dr. Lisa Park", "specialty": "Radiologist", "rating": 4.8, "hospital": "Valley Imaging Center", "hospital_rating": 4.8, "hospital_location": "North Suburbs", "experience": "11 years", "image_initial": "LP"},
-            ],
-            "neurology": [
-                {"id": "dr_006", "name": "Dr. Robert Martinez", "specialty": "Neurologist", "rating": 4.7, "hospital": "NeuroHealth Institute", "hospital_rating": 4.6, "hospital_location": "West Park", "experience": "16 years", "image_initial": "RM"},
-            ],
-            "general medicine": [
-                {"id": "dr_007", "name": "Dr. Emily Brown", "specialty": "General Physician", "rating": 4.6, "hospital": "City Medical Clinic", "hospital_rating": 4.5, "hospital_location": "Central", "experience": "9 years", "image_initial": "EB"},
-                {"id": "dr_008", "name": "Dr. David Kim", "specialty": "Internal Medicine", "rating": 4.5, "hospital": "Hope Medical Center", "hospital_rating": 4.6, "hospital_location": "Central Hills", "experience": "14 years", "image_initial": "DK"},
-            ],
-            "orthopedics": [
-                {"id": "dr_009", "name": "Dr. Susan Lee", "specialty": "Orthopedic Surgeon", "rating": 4.8, "hospital": "Bone & Joint Institute", "hospital_rating": 4.7, "hospital_location": "North", "experience": "20 years", "image_initial": "SL"},
-            ],
-            "oncology": [
-                {"id": "dr_010", "name": "Dr. Thomas Grant", "specialty": "Oncologist", "rating": 4.9, "hospital": "Regional Cancer Center", "hospital_rating": 4.9, "hospital_location": "Medical District", "experience": "22 years", "image_initial": "TG"},
-            ],
-            "pulmonology": [
-                {"id": "dr_011", "name": "Dr. Nancy Wright", "specialty": "Pulmonologist", "rating": 4.7, "hospital": "Lung Health Clinic", "hospital_rating": 4.5, "hospital_location": "South Side", "experience": "13 years", "image_initial": "NW"},
-            ],
-        }
-
-        doctors = all_doctors.get(matched_specialty, all_doctors["general medicine"])
-        for doc in doctors:
-            doc["slots"] = slots_for_doctor(doc["id"])
-
-        app.logger.info(f"Analyzed: specialty={matched_specialty}, urgency={urgency}")
-
-        return jsonify({
-            "error": False,
-            "triage": {
-                "urgency": urgency,
-                "red_flags": red_flags,
-                "specialty": matched_specialty
-            },
-            "doctors": doctors,
-            "intake_snapshot": data  # echo back so frontend can pass to next step
-        }), 200
-
-    except Exception as e:
-        app.logger.error(f"Analyze error: {type(e).__name__}: {str(e)}")
-        return jsonify({"error": True, "messages": [f"Analysis failed: {str(e)}"]}), 500
-
-
-@app.route('/api/book-appointment', methods=['POST'])
-def book_appointment():
-    """
-    Step 4 of the agentic flow: Confirm booking and generate patient prep.
-    Expects JSON with:
-    - intake_data: original patient intake
-    - selected_doctor: {name, specialty, hospital}
-    - selected_slot: {datetime_display, datetime_iso, location}
-
-    Returns: booking_confirmation + patient_message + clinician_summary
-    """
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({"error": True, "messages": ["No booking data provided"]}), 400
-
-        intake = data.get("intake_data", {})
-        doctor = data.get("selected_doctor", {})
-        slot   = data.get("selected_slot", {})
-
-        if not doctor or not slot:
-            return jsonify({"error": True, "messages": ["Doctor and slot selection required"]}), 400
-
-        # Merge the confirmed booking details into the raw_intake
-        raw_intake = {**intake}
-        raw_intake["clinician_name"]        = doctor.get("name", intake.get("clinician_name", ""))
-        raw_intake["appointment_datetime"]  = slot.get("datetime_display", intake.get("appointment_datetime", ""))
-        raw_intake["appointment_type"]      = intake.get("appointment_type", "Consultation")
-        raw_intake["procedure"]             = intake.get("procedure", doctor.get("specialty", "Consultation"))
-
-        # Run the full agent to generate patient prep + clinician brief
-        result = run_agent(raw_intake, rules_engine, retrieval_service, llm_client, storage)
-
-        if result.get("error"):
-            app.logger.warning(f"Agent error during booking: {result.get('messages')}")
-            return jsonify(result), 400
-
-        # Build booking confirmation
-        confirmation = {
-            "error": False,
-            "booking": {
-                "doctor_name":   doctor.get("name"),
-                "specialty":     doctor.get("specialty"),
-                "hospital":      doctor.get("hospital"),
-                "hospital_location": doctor.get("hospital_location"),
-                "date_time":     slot.get("datetime_display"),
-                "location":      slot.get("location", "Main Clinic"),
-                "duration":      slot.get("duration", "45 min"),
-                "confirmation_id": f"PREPCARE-{int(datetime.now().timestamp())}"
-            },
-            "patient_message":   result.get("patient_message"),
-            "clinician_summary": result.get("clinician_summary"),
-        }
-
-        app.logger.info(f"Appointment booked: {confirmation['booking']['confirmation_id']}")
-        return jsonify(confirmation), 200
-
-    except Exception as e:
-        app.logger.error(f"Book appointment error: {type(e).__name__}: {str(e)}")
-        return jsonify({"error": True, "messages": [f"Booking failed: {str(e)}"]}), 500
 
 
 @app.route('/api/post-procedure', methods=['POST'])
@@ -851,6 +648,334 @@ def bad_request(error):
         "error": True,
         "messages": ["Invalid request. Please check your input."]
     }), 400
+
+
+# ============================================================================
+# NEW API ROUTES FOR AGENTIC UPGRADE
+# ============================================================================
+
+@app.route('/api/transcribe', methods=['POST'])
+def transcribe_audio():
+    """
+    Transcribe audio file to text using voice service.
+    
+    Expects multipart/form-data with 'audio' file field.
+    
+    Returns JSON with:
+    - error: Boolean indicating success/failure
+    - text: Transcribed text (on success)
+    - confidence: Confidence score (on success)
+    - language: Detected language (on success)
+    - messages: Error messages (on failure)
+    
+    Validates: Requirements 13.1, 13.2, 13.3, 13.4, 13.12, 13.13
+    """
+    try:
+        app.logger.info("Transcription request received")
+        
+        # Check if audio file is present
+        if 'audio' not in request.files:
+            app.logger.warning("No audio file in request")
+            return jsonify({
+                "error": True,
+                "messages": ["No audio file provided"]
+            }), 400
+        
+        audio_file = request.files['audio']
+        
+        # Check if file is empty
+        if audio_file.filename == '':
+            app.logger.warning("Empty audio filename")
+            return jsonify({
+                "error": True,
+                "messages": ["No audio file selected"]
+            }), 400
+        
+        # Save to temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
+            audio_file.save(temp_file.name)
+            temp_path = temp_file.name
+        
+        try:
+            # Transcribe audio
+            result = voice_service.transcribe_audio(temp_path)
+            
+            if result.get("error"):
+                app.logger.error(f"Transcription error: {result.get('error')}")
+                return jsonify({
+                    "error": True,
+                    "messages": [result.get("error")]
+                }), 500
+            
+            app.logger.info(f"Transcription successful: {len(result.get('text', ''))} chars")
+            
+            return jsonify({
+                "error": False,
+                "text": result.get("text", ""),
+                "confidence": result.get("confidence", 0.0),
+                "language": result.get("language", "en-US")
+            }), 200
+            
+        finally:
+            # Clean up temporary file
+            import os
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+    
+    except Exception as e:
+        app.logger.error(f"Transcription endpoint error: {type(e).__name__}: {str(e)}")
+        return jsonify({
+            "error": True,
+            "messages": ["Failed to transcribe audio. Please try again."]
+        }), 500
+
+
+@app.route('/api/hospital-lookup', methods=['POST'])
+def hospital_lookup():
+    """
+    Search for hospitals based on procedure type.
+    
+    Expects JSON with:
+    - procedure: Procedure type (required)
+    - location: Optional location for proximity search
+    
+    Returns JSON with:
+    - error: Boolean indicating success/failure
+    - hospitals: List of ranked hospitals (on success)
+    - messages: Error messages (on failure)
+    
+    Validates: Requirements 13.5, 13.6, 13.7, 13.12, 13.13
+    """
+    try:
+        app.logger.info("Hospital lookup request received")
+        
+        data = request.get_json()
+        
+        if not data:
+            app.logger.warning("No JSON data in request")
+            return jsonify({
+                "error": True,
+                "messages": ["No data provided"]
+            }), 400
+        
+        procedure = data.get("procedure", "")
+        
+        if not procedure:
+            app.logger.warning("No procedure specified")
+            return jsonify({
+                "error": True,
+                "messages": ["Procedure type is required"]
+            }), 400
+        
+        # Search for hospitals
+        hospitals = hospital_lookup_service.search_hospitals(procedure)
+        
+        app.logger.info(f"Found {len(hospitals)} hospitals for procedure: {procedure}")
+        
+        return jsonify({
+            "error": False,
+            "hospitals": hospitals
+        }), 200
+    
+    except Exception as e:
+        app.logger.error(f"Hospital lookup endpoint error: {type(e).__name__}: {str(e)}")
+        return jsonify({
+            "error": True,
+            "messages": ["Failed to search hospitals. Please try again."]
+        }), 500
+
+
+@app.route('/api/analyze', methods=['POST'])
+def analyze_intake():
+    """
+    Analyze intake data and perform triage (Step 2 of wizard).
+    
+    Expects JSON with intake data (chief_complaint, symptoms, etc.)
+    
+    Returns JSON with:
+    - error: Boolean indicating success/failure
+    - triage: Triage results (urgency, specialty, red_flags)
+    - doctors: Available doctors with slots
+    - messages: Error messages (on failure)
+    
+    Validates: Requirements 13.8, 13.9, 13.12, 13.13
+    """
+    try:
+        app.logger.info("Analysis request received")
+        
+        data = request.get_json()
+        
+        if not data:
+            app.logger.warning("No JSON data in request")
+            return jsonify({
+                "error": True,
+                "messages": ["No data provided"]
+            }), 400
+        
+        # Import agent tools directly for partial workflow
+        from agent.state import create_initial_state
+        from agent.tools import (
+            intake_node_tool,
+            triage_node_tool,
+            hospital_suggestion_node
+        )
+        
+        # Create initial state
+        state = create_initial_state(data)
+        
+        # Run partial workflow: intake -> triage -> hospital_suggestion
+        state = intake_node_tool(state, llm_client)
+        state = triage_node_tool(state)
+        state = hospital_suggestion_node(state)
+        
+        # Check for errors
+        if state.get("errors"):
+            app.logger.error(f"Analysis error: {state['errors']}")
+            return jsonify({
+                "error": True,
+                "messages": state["errors"]
+            }), 500
+        
+        # Extract triage and hospital data
+        triage_data = state.get("triage_data", {})
+        hospital_data = state.get("hospital_data", {})
+        
+        # Map to UI-expected format
+        urgency = triage_data.get("urgency_level", "routine")
+        red_flags = triage_data.get("red_flags", [])
+        
+        # Determine specialty from procedure or chief complaint
+        procedure = data.get("procedure", "").lower()
+        chief_complaint = data.get("chief_complaint", "").lower()
+        
+        specialty = "General Medicine"
+        if "cardio" in procedure or "heart" in chief_complaint or "chest" in chief_complaint:
+            specialty = "Cardiology"
+        elif "colon" in procedure or "endoscopy" in procedure:
+            specialty = "Gastroenterology"
+        elif "mri" in procedure or "ct" in procedure or "imaging" in procedure:
+            specialty = "Radiology"
+        elif "surgery" in procedure:
+            specialty = "Surgery"
+        
+        app.logger.info(f"Analysis complete: urgency={urgency}, specialty={specialty}, doctors={len(hospital_data.get('doctors', []))}")
+        
+        return jsonify({
+            "error": False,
+            "triage": {
+                "urgency": urgency,
+                "specialty": specialty,
+                "red_flags": red_flags
+            },
+            "doctors": hospital_data.get("doctors", [])
+        }), 200
+    
+    except Exception as e:
+        app.logger.error(f"Analysis endpoint error: {type(e).__name__}: {str(e)}")
+        return jsonify({
+            "error": True,
+            "messages": ["Failed to analyze intake. Please try again."]
+        }), 500
+
+
+@app.route('/api/book-appointment', methods=['POST'])
+def book_appointment():
+    """
+    Book appointment and generate prep summary (Step 4 of wizard).
+    
+    Expects JSON with:
+    - intake_data: All intake data from Step 1
+    - selected_doctor: Doctor object with name, specialty, hospital, etc.
+    - selected_slot: Slot object with datetime_iso, duration, location
+    
+    Returns JSON with:
+    - error: Boolean indicating success/failure
+    - booking_confirmed: Boolean
+    - booking: Booking details (confirmation_id, doctor_name, hospital, date_time)
+    - patient_message: Prep instructions
+    - clinician_summary: Clinician briefing
+    - messages: Error messages (on failure)
+    
+    Validates: Requirements 13.10, 13.11, 13.12, 13.13
+    """
+    try:
+        app.logger.info("Booking request received")
+        
+        data = request.get_json()
+        
+        if not data:
+            app.logger.warning("No JSON data in request")
+            return jsonify({
+                "error": True,
+                "messages": ["No data provided"]
+            }), 400
+        
+        # Validate required booking fields
+        intake_data = data.get("intake_data", {})
+        selected_doctor = data.get("selected_doctor", {})
+        selected_slot = data.get("selected_slot", {})
+        
+        if not selected_doctor:
+            return jsonify({
+                "error": True,
+                "messages": ["Doctor selection is required"]
+            }), 400
+        
+        if not selected_slot:
+            return jsonify({
+                "error": True,
+                "messages": ["Time slot selection is required"]
+            }), 400
+        
+        # Merge intake data with booking selections
+        raw_intake = intake_data.copy()
+        raw_intake["clinician_name"] = selected_doctor.get("name", "Doctor")
+        raw_intake["appointment_datetime"] = selected_slot.get("datetime_display", "")
+        raw_intake["selected_hospital"] = selected_doctor.get("hospital", "")
+        raw_intake["selected_location"] = selected_slot.get("location", "")
+        
+        # Run full agent workflow to generate prep instructions
+        result = run_agent(
+            raw_intake=raw_intake,
+            rules_engine=rules_engine,
+            retrieval_service=retrieval_service,
+            llm_client=llm_client,
+            storage=storage
+        )
+        
+        if result.get("error"):
+            app.logger.error(f"Booking error: {result.get('messages')}")
+            return jsonify({
+                "error": True,
+                "messages": result.get("messages", ["Booking failed"])
+            }), 500
+        
+        # Generate confirmation ID
+        import uuid
+        confirmation_id = f"PREP-{uuid.uuid4().hex[:8].upper()}"
+        
+        app.logger.info(f"Booking complete: confirmation_id={confirmation_id}")
+        
+        return jsonify({
+            "error": False,
+            "booking_confirmed": True,
+            "booking": {
+                "confirmation_id": confirmation_id,
+                "doctor_name": selected_doctor.get("name", "Doctor"),
+                "hospital": selected_doctor.get("hospital", "Hospital"),
+                "date_time": selected_slot.get("datetime_display", "")
+            },
+            "patient_message": result.get("patient_message", ""),
+            "clinician_summary": result.get("clinician_summary", ""),
+            "message_id": result.get("message_id")
+        }), 200
+    
+    except Exception as e:
+        app.logger.error(f"Booking endpoint error: {type(e).__name__}: {str(e)}")
+        return jsonify({
+            "error": True,
+            "messages": ["Failed to book appointment. Please try again."]
+        }), 500
 
 
 @app.errorhandler(404)

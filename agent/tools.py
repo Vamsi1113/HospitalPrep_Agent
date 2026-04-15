@@ -35,15 +35,16 @@ def intake_node_tool(state: AgentState, llm_client, **kwargs) -> AgentState:
     This tool:
     1. Extracts chief complaint and symptoms from raw intake
     2. Normalizes casual symptom language to clinical terms (using LLM if available)
-    3. Identifies missing information
-    4. Generates follow-up questions if needed
+    3. Enriches intake with EHR/FHIR data if fhir_patient_id is provided
+    4. Identifies missing information
+    5. Generates follow-up questions if needed
     
     Args:
         state: Current agent state
         llm_client: LLM client for symptom normalization
     
     Returns:
-        Updated state with intake_data populated
+        Updated state with intake_data and ehr_context populated
     """
     logger.info("Agent Tool: intake_node_tool (Phase I)")
     
@@ -57,7 +58,45 @@ def intake_node_tool(state: AgentState, llm_client, **kwargs) -> AgentState:
     try:
         raw = state["raw_intake"]
         
-        # Extract chief complaint
+        # Check for FHIR patient ID and enrich with EHR data if available
+        fhir_patient_id = raw.get("fhir_patient_id")
+        if fhir_patient_id:
+            try:
+                from services.ehr_service import EHRService
+                ehr_service = EHRService()
+                
+                logger.info(f"Enriching intake with EHR data for patient: {fhir_patient_id}")
+                enriched_data = ehr_service.enrich_intake(raw, fhir_patient_id)
+                
+                # Update raw_intake with enriched data
+                state["raw_intake"].update(enriched_data.get("intake_data", {}))
+                
+                # Store EHR context
+                state["ehr_context"] = enriched_data.get("ehr_context", {})
+                
+                state["metadata"]["steps"].append({
+                    "step": "ehr_enrichment",
+                    "phase": "I",
+                    "timestamp": datetime.now().isoformat(),
+                    "description": "EHR data enrichment successful",
+                    "fhir_patient_id": fhir_patient_id
+                })
+                
+                logger.info("EHR enrichment successful")
+                
+            except Exception as ehr_error:
+                logger.warning(f"EHR enrichment failed: {ehr_error}")
+                state["metadata"]["steps"].append({
+                    "step": "ehr_enrichment_failed",
+                    "phase": "I",
+                    "timestamp": datetime.now().isoformat(),
+                    "description": f"EHR enrichment failed: {str(ehr_error)}",
+                    "fhir_patient_id": fhir_patient_id
+                })
+                # Continue with manual data - don't fail the entire intake
+        
+        # Extract chief complaint (may have been enriched by EHR)
+        raw = state["raw_intake"]  # Re-read after potential enrichment
         chief_complaint = raw.get("chief_complaint", "")
         symptoms_desc = raw.get("symptoms_description", "")
         
@@ -100,7 +139,8 @@ def intake_node_tool(state: AgentState, llm_client, **kwargs) -> AgentState:
             "phase": "I",
             "timestamp": datetime.now().isoformat(),
             "normalized": normalized_complaint is not None,
-            "needs_clarification": intake_data["needs_clarification"]
+            "needs_clarification": intake_data["needs_clarification"],
+            "ehr_enriched": fhir_patient_id is not None
         })
         
     except Exception as e:
@@ -951,59 +991,209 @@ def _assess_prep_status(state: AgentState) -> str:
 
 
 def _build_patient_message_draft(state: AgentState) -> str:
-    """Build draft patient message from all phases."""
+    """Build comprehensive patient message from all phases."""
     parts = []
     
     # Header
     raw = state["raw_intake"]
-    parts.append(f"APPOINTMENT PREPARATION GUIDE")
-    parts.append(f"Patient: {raw.get('patient_name', 'Unknown')}")
-    parts.append(f"Appointment: {raw.get('appointment_type')} - {raw.get('procedure')}")
-    parts.append("")
+    intake = state.get("intake_data", {})
+    admin = state.get("admin_prep_data", {})
+    triage = state.get("triage_data", {})
+    hospital_data = state.get("hospital_data", {})
     
-    # Symptom clarification
-    intake = state.get("intake_data")
+    patient_name = raw.get('patient_name', 'Patient')
+    procedure = raw.get('procedure', 'Consultation')
+    appointment_type = raw.get('appointment_type', 'Consultation')
+    clinician_name = raw.get('clinician_name', 'your doctor')
+    appointment_datetime = raw.get('appointment_datetime', 'your scheduled time')
+    
+    parts.append(f"APPOINTMENT PREPARATION GUIDE")
+    parts.append(f"")
+    parts.append(f"Dear {patient_name},")
+    parts.append(f"")
+    parts.append(f"This guide will help you prepare for your upcoming {appointment_type} appointment with {clinician_name} on {appointment_datetime}.")
+    parts.append(f"")
+    
+    # Appointment Overview
+    parts.append(f"APPOINTMENT OVERVIEW:")
+    parts.append(f"")
+    parts.append(f"Procedure: {procedure}")
+    parts.append(f"Type: {appointment_type}")
+    parts.append(f"Doctor: {clinician_name}")
+    parts.append(f"Date & Time: {appointment_datetime}")
+    
+    # Hospital information if available
+    if hospital_data and hospital_data.get("doctors"):
+        selected_doctor = hospital_data["doctors"][0] if hospital_data["doctors"] else {}
+        if selected_doctor:
+            parts.append(f"Hospital: {selected_doctor.get('hospital', 'Hospital')}")
+            parts.append(f"Location: {selected_doctor.get('hospital_location', 'Location')}")
+    
+    parts.append(f"")
+    
+    # Reason for visit
     if intake and intake.get("chief_complaint"):
         parts.append(f"REASON FOR VISIT:")
-        parts.append(intake["chief_complaint"])
+        parts.append(f"")
+        parts.append(f"You are being seen for: {intake['chief_complaint']}")
+        if raw.get("symptoms_description"):
+            parts.append(f"Symptoms: {raw['symptoms_description']}")
         if intake.get("chief_complaint_normalized"):
-            parts.append(f"(Clinical term: {intake['chief_complaint_normalized']})")
-        parts.append("")
+            parts.append(f"Clinical assessment: {intake['chief_complaint_normalized']}")
+        parts.append(f"")
     
-    # Admin prep
-    admin = state.get("admin_prep_data")
-    if admin:
-        parts.append("WHAT TO BRING:")
+    # Medical history context
+    if raw.get("current_medications") or raw.get("allergies") or raw.get("prior_conditions"):
+        parts.append(f"YOUR MEDICAL INFORMATION:")
+        parts.append(f"")
+        if raw.get("current_medications"):
+            meds = raw["current_medications"]
+            parts.append(f"Current Medications: {', '.join(meds) if isinstance(meds, list) else meds}")
+        if raw.get("allergies"):
+            allergies = raw["allergies"]
+            parts.append(f"Allergies: {', '.join(allergies) if isinstance(allergies, list) else allergies}")
+        if raw.get("prior_conditions"):
+            conditions = raw["prior_conditions"]
+            parts.append(f"Medical History: {', '.join(conditions) if isinstance(conditions, list) else conditions}")
+        parts.append(f"")
+    
+    # Urgency level if not routine
+    if triage and triage.get("urgency_level") and triage["urgency_level"] != "routine":
+        urgency = triage["urgency_level"].upper()
+        parts.append(f"⚠️ URGENCY LEVEL: {urgency}")
+        parts.append(f"")
+        if triage.get("red_flags"):
+            parts.append(f"Important clinical indicators have been identified:")
+            for flag in triage["red_flags"]:
+                parts.append(f"  • {flag}")
+            parts.append(f"")
+    
+    # What to bring
+    parts.append(f"WHAT TO BRING TO YOUR APPOINTMENT:")
+    parts.append(f"")
+    if admin and admin.get("required_documents"):
         for doc in admin["required_documents"]:
             parts.append(f"  • {doc}")
-        parts.append("")
-        
-        if admin.get("arrival_instructions"):
-            parts.append("ARRIVAL:")
-            parts.append(admin["arrival_instructions"])
-            parts.append("")
-        
-        if admin.get("fasting_instructions"):
-            parts.append("FASTING:")
-            parts.append(admin["fasting_instructions"])
-            parts.append("")
-        
-        if admin.get("transport_instructions"):
-            parts.append("TRANSPORTATION:")
-            parts.append(admin["transport_instructions"])
-            parts.append("")
+    else:
+        parts.append(f"  • Photo ID (driver's license or passport)")
+        parts.append(f"  • Insurance card and any referral forms")
+        parts.append(f"  • List of current medications with dosages")
+        parts.append(f"  • Any recent test results or medical records")
+        parts.append(f"  • Payment method for copay")
+    parts.append(f"")
     
-    # Red flags
-    triage = state.get("triage_data")
+    # Arrival instructions
+    parts.append(f"ARRIVAL INSTRUCTIONS:")
+    parts.append(f"")
+    if admin and admin.get("arrival_instructions"):
+        parts.append(admin["arrival_instructions"])
+    else:
+        parts.append(f"Please arrive 15 minutes before your scheduled appointment time to complete check-in.")
+        parts.append(f"This allows time for registration, insurance verification, and any necessary paperwork.")
+    parts.append(f"")
+    
+    # Fasting instructions if applicable
+    if admin and admin.get("fasting_instructions"):
+        parts.append(f"FASTING REQUIREMENTS:")
+        parts.append(f"")
+        parts.append(admin["fasting_instructions"])
+        parts.append(f"")
+    
+    # Transportation if needed
+    if admin and admin.get("transport_instructions"):
+        parts.append(f"TRANSPORTATION:")
+        parts.append(f"")
+        parts.append(admin["transport_instructions"])
+        parts.append(f"")
+    
+    # Diet instructions if applicable
+    if admin and admin.get("diet_instructions"):
+        parts.append(f"DIETARY GUIDELINES:")
+        parts.append(f"")
+        parts.append(admin["diet_instructions"])
+        parts.append(f"")
+    
+    # Medication instructions
+    parts.append(f"MEDICATION INSTRUCTIONS:")
+    parts.append(f"")
+    if raw.get("current_medications"):
+        parts.append(f"Continue taking your regular medications unless specifically instructed otherwise by your doctor.")
+        parts.append(f"Bring a complete list of all medications, including over-the-counter drugs and supplements.")
+    else:
+        parts.append(f"If you take any medications, bring a complete list including dosages.")
+    parts.append(f"")
+    
+    # Preparation checklist
+    if admin and admin.get("patient_readiness_checklist"):
+        parts.append(f"PREPARATION CHECKLIST:")
+        parts.append(f"")
+        for item in admin["patient_readiness_checklist"]:
+            parts.append(f"  ☐ {item}")
+        parts.append(f"")
+    
+    # What to expect
+    parts.append(f"WHAT TO EXPECT:")
+    parts.append(f"")
+    if "consultation" in procedure.lower() or "consultation" in appointment_type.lower():
+        parts.append(f"During your consultation, the doctor will:")
+        parts.append(f"  • Review your medical history and current symptoms")
+        parts.append(f"  • Perform a physical examination")
+        parts.append(f"  • Discuss diagnosis and treatment options")
+        parts.append(f"  • Answer any questions you may have")
+        parts.append(f"  • Provide next steps and follow-up recommendations")
+    elif "imaging" in procedure.lower() or "mri" in procedure.lower() or "ct" in procedure.lower():
+        parts.append(f"During your imaging appointment:")
+        parts.append(f"  • You will be positioned for the scan")
+        parts.append(f"  • The procedure is painless and non-invasive")
+        parts.append(f"  • You may need to remain still during the scan")
+        parts.append(f"  • Results will be reviewed by a radiologist")
+        parts.append(f"  • Your doctor will discuss findings with you")
+    elif "surgery" in procedure.lower():
+        parts.append(f"For your surgical procedure:")
+        parts.append(f"  • Pre-operative assessment will be completed")
+        parts.append(f"  • Anesthesia options will be discussed")
+        parts.append(f"  • Post-operative care instructions will be provided")
+        parts.append(f"  • Recovery timeline will be explained")
+    else:
+        parts.append(f"Your healthcare team will guide you through each step of your appointment.")
+        parts.append(f"Please feel free to ask questions at any time.")
+    parts.append(f"")
+    
+    # Important warnings
     if triage and triage.get("red_flags"):
-        parts.append("⚠️ IMPORTANT - CALL CLINIC IF:")
+        parts.append(f"⚠️ IMPORTANT - SEEK IMMEDIATE CARE IF YOU EXPERIENCE:")
+        parts.append(f"")
         for flag in triage["red_flags"]:
             parts.append(f"  • {flag}")
-        parts.append("")
+        parts.append(f"")
+        parts.append(f"If symptoms worsen before your appointment, call the clinic immediately or go to the emergency room.")
+        parts.append(f"")
+    
+    # Questions to ask
+    parts.append(f"QUESTIONS TO CONSIDER ASKING YOUR DOCTOR:")
+    parts.append(f"")
+    parts.append(f"  • What is causing my symptoms?")
+    parts.append(f"  • What treatment options are available?")
+    parts.append(f"  • Are there any lifestyle changes I should make?")
+    parts.append(f"  • When should I expect to see improvement?")
+    parts.append(f"  • What are the next steps in my care?")
+    parts.append(f"  • When should I schedule a follow-up?")
+    parts.append(f"")
+    
+    # Contact information
+    parts.append(f"NEED TO RESCHEDULE OR HAVE QUESTIONS?")
+    parts.append(f"")
+    parts.append(f"Please contact the clinic as soon as possible if you:")
+    parts.append(f"  • Need to reschedule your appointment")
+    parts.append(f"  • Have questions about preparation instructions")
+    parts.append(f"  • Experience worsening symptoms")
+    parts.append(f"  • Need clarification on any instructions")
+    parts.append(f"")
     
     # Closing
-    parts.append("If you have questions, please contact the clinic.")
-    parts.append("This is a preparation guide, not medical advice.")
+    parts.append(f"We look forward to seeing you at your appointment. Our team is committed to providing you with excellent care.")
+    parts.append(f"")
+    parts.append(f"Important Note: This is a preparation guide based on your intake information. It is not a substitute for medical advice. Always follow specific instructions provided by your healthcare team.")
     
     return "\n".join(parts)
 
@@ -1502,7 +1692,7 @@ def conversation_intake_node(state: AgentState, llm_client=None, **kwargs) -> Ag
 def missing_info_detector_node(state: AgentState, **kwargs) -> AgentState:
     """
     Checks if there are required fields missing from the extracted structured context.
-    Outputs COMPLETE -> proceed, INCOMPLETE -> trigger clarification.
+    Calls missing_field_detector service to detect missing fields and calculate confidence.
     """
     logger.info("Agent Tool: missing_info_detector_node")
     state["metadata"]["steps"].append({
@@ -1510,20 +1700,38 @@ def missing_info_detector_node(state: AgentState, **kwargs) -> AgentState:
         "timestamp": datetime.now().isoformat()
     })
     
-    raw = state.get("raw_intake", {})
-    missing_fields = []
-    
-    if not raw.get("patient_name"): missing_fields.append("patient_name")
-    if not raw.get("procedure") and not raw.get("chief_complaint"): missing_fields.append("procedure")
-    
-    state["conversation_data"]["missing_fields"] = missing_fields
-    
-    if missing_fields:
-        state["conversation_data"]["confidence_score"] = 0.5
-    else:
-        state["conversation_data"]["confidence_score"] = 0.95
+    try:
+        from services.missing_field_detector import detect_missing_fields
         
-    # The output is determined by checking missing_fields list length > 0
+        raw_intake = state.get("raw_intake", {})
+        appointment_type = raw_intake.get("appointment_type", "")
+        
+        # Detect missing fields using the service
+        result = detect_missing_fields(raw_intake, appointment_type)
+        
+        # Update conversation_data
+        if "conversation_data" not in state or state["conversation_data"] is None:
+            state["conversation_data"] = {}
+            
+        state["conversation_data"]["missing_fields"] = result["missing_fields"]
+        state["conversation_data"]["confidence_score"] = result["confidence_score"]
+        state["conversation_data"]["confidence_scores"] = result["confidence_scores"]
+        state["conversation_data"]["suggested_options"] = result["suggested_options"]
+        
+        logger.info(
+            f"Missing fields: {len(result['missing_fields'])}, "
+            f"Confidence: {result['confidence_score']:.2f}"
+        )
+        
+    except Exception as e:
+        logger.error(f"Missing info detector error: {e}")
+        state["errors"].append(f"Missing info detector error: {str(e)}")
+        # Set default values to prevent downstream errors
+        if "conversation_data" not in state:
+            state["conversation_data"] = {}
+        state["conversation_data"]["missing_fields"] = []
+        state["conversation_data"]["confidence_score"] = 1.0
+        
     return state
 
 def clarification_agent_node(state: AgentState, **kwargs) -> AgentState:
@@ -1537,19 +1745,53 @@ def clarification_agent_node(state: AgentState, **kwargs) -> AgentState:
         "timestamp": datetime.now().isoformat()
     })
     
-    missing = state.get("conversation_data", {}).get("missing_fields", [])
-    suggested_options = {}
-    clarification_message = []
-    
-    if "procedure" in missing:
-        clarification_message.append("What kind of procedure or appointment do you need?")
-        suggested_options["procedure"] = ["Colonoscopy", "MRI", "CT Scan", "General Checkup", "Consultation"]
+    try:
+        conversation_data = state.get("conversation_data", {})
+        missing_fields = conversation_data.get("missing_fields", [])
+        suggested_options = conversation_data.get("suggested_options", {})
         
-    if "patient_name" in missing:
-        clarification_message.append("Could you please provide your full name for the booking?")
-
-    state["conversation_data"]["suggested_options"] = suggested_options
-    state["draft_message"] = " ".join(clarification_message)
+        if not missing_fields:
+            # No missing fields, no clarification needed
+            state["draft_message"] = ""
+            return state
+        
+        # Generate follow-up questions
+        questions = []
+        
+        for field in missing_fields:
+            if field == "chief_complaint":
+                questions.append("What is the main reason for your visit?")
+            elif field == "appointment_type":
+                questions.append("What type of appointment do you need?")
+                if "appointment_type" in suggested_options:
+                    questions.append(f"Options: {', '.join(suggested_options['appointment_type'])}")
+            elif field == "symptoms_description":
+                questions.append("Can you describe your symptoms in more detail?")
+            elif field == "age_group":
+                questions.append("What is your age group?")
+                if "age_group" in suggested_options:
+                    questions.append(f"Options: {', '.join(suggested_options['age_group'])}")
+            elif field == "current_medications":
+                questions.append("Are you currently taking any medications?")
+            elif field == "allergies":
+                questions.append("Do you have any allergies?")
+            elif field == "procedure":
+                questions.append("What kind of procedure or appointment do you need?")
+                if "procedure" in suggested_options:
+                    questions.append(f"Options: {', '.join(suggested_options['procedure'])}")
+            elif field == "patient_name":
+                questions.append("Could you please provide your full name for the booking?")
+        
+        # Combine questions
+        clarification_message = "\n\n".join(questions)
+        state["draft_message"] = clarification_message
+        
+        logger.info(f"Generated {len(questions)} follow-up questions")
+        
+    except Exception as e:
+        logger.error(f"Clarification agent error: {e}")
+        state["errors"].append(f"Clarification agent error: {str(e)}")
+        state["draft_message"] = "Please provide more information about your appointment needs."
     
     return state
 
@@ -1638,6 +1880,7 @@ def scheduling_orchestrator_node(state: AgentState, **kwargs) -> AgentState:
 def hospital_suggestion_node(state: AgentState, **kwargs) -> AgentState:
     """
     Search and suggest suitable hospitals based on ratings and proximity to procedure requirements.
+    Calls hospital_lookup_service to find and rank hospitals.
     """
     logger.info("Agent Tool: hospital_suggestion_node")
     state["metadata"]["steps"].append({
@@ -1645,34 +1888,407 @@ def hospital_suggestion_node(state: AgentState, **kwargs) -> AgentState:
         "timestamp": datetime.now().isoformat()
     })
     
-    procedure = state.get("raw_intake", {}).get("procedure", "General Medical").lower()
-    
-    # Mock hospital database with ratings
-    hospitals = [
-        {"name": "St. Jude Premier Health", "rating": 4.9, "specialty": "cardiology, surgery", "location": "Downtown"},
-        {"name": "Metro General Hospital", "rating": 4.5, "specialty": "general, endoscopy", "location": "East Side"},
-        {"name": "Valley Imaging Center", "rating": 4.8, "specialty": "mri, radiology", "location": "North Suburbs"},
-        {"name": "City Children's Hospital", "rating": 4.7, "specialty": "pediatrics", "location": "West Park"},
-        {"name": "Hope Medical Center", "rating": 4.6, "specialty": "general, oncology", "location": "Central Hills"}
-    ]
-    
-    # Basic filtering logic
-    relevant = []
-    if "colonoscopy" in procedure or "endoscopy" in procedure:
-        relevant = [h for h in hospitals if "endoscopy" in h["specialty"] or "general" in h["specialty"]]
-    elif "mri" in procedure or "ct" in procedure or "scan" in procedure:
-        relevant = [h for h in hospitals if "radiology" in h["specialty"] or "mri" in h["specialty"]]
-    elif "surgery" in procedure:
-        relevant = [h for h in hospitals if "surgery" in h["specialty"]]
-    else:
-        relevant = [h for h in hospitals if "general" in h["specialty"]]
+    try:
+        from services.hospital_lookup_service import HospitalLookupService
         
-    # Sort by rating
-    relevant.sort(key=lambda x: x["rating"], reverse=True)
+        raw_intake = state.get("raw_intake", {})
+        procedure = raw_intake.get("procedure", "")
+        
+        if not procedure:
+            logger.warning("No procedure specified, skipping hospital lookup")
+            state["hospital_data"] = {"hospitals": [], "suggested_hospitals": []}
+            return state
+        
+        # Initialize hospital lookup service in mock mode
+        hospital_service = HospitalLookupService(mock_mode=True)
+        
+        # Search for hospitals
+        hospitals = hospital_service.search_hospitals(procedure)
+        
+        # Extract doctors from hospitals
+        all_doctors = []
+        for hospital in hospitals:
+            doctors = hospital.get("doctors", [])
+            all_doctors.extend(doctors)
+        
+        # Update hospital_data
+        state["hospital_data"] = {
+            "hospitals": hospitals,
+            "suggested_hospitals": hospitals,  # For backward compatibility
+            "selected_hospital": None,
+            "doctors": all_doctors,
+            "selected_doctor": None,
+            "selected_slot": None,
+            "search_query": procedure
+        }
+        
+        logger.info(f"Found {len(hospitals)} hospitals with {len(all_doctors)} doctors")
+        
+    except Exception as e:
+        logger.error(f"Hospital suggestion error: {e}")
+        state["errors"].append(f"Hospital suggestion error: {str(e)}")
+        state["hospital_data"] = {"hospitals": [], "suggested_hospitals": []}
     
-    state["hospital_data"] = {
-        "suggested_hospitals": relevant,
-        "search_query": procedure
-    }
+    return state
+
+
+# ============================================================================
+# AGENTIC UPGRADE: NEW TOOLS FOR VOICE, EHR, HOSPITAL LOOKUP
+# ============================================================================
+
+def voice_input_node_tool(state: AgentState, **kwargs) -> AgentState:
+    """
+    Voice Input Node: Logs voice input detection.
+    
+    This node checks if input mode is voice and logs the detection.
+    The actual transcription is done by /api/transcribe before this node.
+    
+    Args:
+        state: Current agent state
+    
+    Returns:
+        Updated state with voice input logged
+    """
+    logger.info("Agent Tool: voice_input_node_tool")
+    
+    conversation_data = state.get("conversation_data", {})
+    
+    if conversation_data.get("input_mode") == "voice":
+        state["reasoning_trace"].append({
+            "node": "voice_input",
+            "action": "Voice input detected",
+            "transcript": conversation_data.get("current_transcript", ""),
+            "timestamp": datetime.now().isoformat()
+        })
+        logger.info("Voice input mode detected")
+    else:
+        state["reasoning_trace"].append({
+            "node": "voice_input",
+            "action": "Text input mode",
+            "timestamp": datetime.now().isoformat()
+        })
+    
+    return state
+
+
+def conversation_intake_node_tool(state: AgentState, llm_client=None, **kwargs) -> AgentState:
+    """
+    Conversation Intake Node: Extracts structured data from conversational query.
+    
+    This node uses LLM (if available) to extract structured fields from
+    free-form conversational text.
+    
+    Args:
+        state: Current agent state
+        llm_client: LLM client for extraction
+    
+    Returns:
+        Updated state with extracted structured data
+    """
+    logger.info("Agent Tool: conversation_intake_node_tool")
+    
+    state["reasoning_trace"].append({
+        "node": "conversation_intake",
+        "action": "Extracting structured data from conversational query",
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    try:
+        conversation_data = state.get("conversation_data", {})
+        transcript = conversation_data.get("current_transcript", "")
+        
+        if not transcript:
+            # No transcript to process
+            return state
+        
+        # Use LLM to extract structured fields if available
+        if llm_client and llm_client.is_available():
+            extraction_prompt = f"""Extract the following information from the patient's message:
+- Patient name (if mentioned)
+- Chief complaint or reason for visit
+- Symptoms description
+- Appointment type (Consultation, Surgery, Imaging, Lab Work, Procedure)
+- Procedure name (if mentioned)
+
+Patient message: {transcript}
+
+Return the extracted information in a structured format."""
+            
+            extracted = llm_client.generate_with_prompt(
+                "You are a medical intake assistant extracting structured information.",
+                extraction_prompt
+            )
+            
+            if extracted:
+                # Parse extracted data and update raw_intake
+                # This is a simplified version - could be enhanced with JSON parsing
+                state["reasoning_trace"].append({
+                    "node": "conversation_intake",
+                    "action": "LLM extraction completed",
+                    "extracted": extracted[:200],
+                    "timestamp": datetime.now().isoformat()
+                })
+        
+        # Basic keyword extraction as fallback
+        transcript_lower = transcript.lower()
+        raw_intake = state.get("raw_intake", {})
+        
+        # Extract procedure keywords
+        if "colonoscopy" in transcript_lower:
+            raw_intake["procedure"] = "Colonoscopy"
+            raw_intake["appointment_type"] = "Procedure"
+        elif "mri" in transcript_lower:
+            raw_intake["procedure"] = "MRI"
+            raw_intake["appointment_type"] = "Imaging"
+        elif "ct scan" in transcript_lower or "ct" in transcript_lower:
+            raw_intake["procedure"] = "CT Scan"
+            raw_intake["appointment_type"] = "Imaging"
+        elif "surgery" in transcript_lower:
+            raw_intake["appointment_type"] = "Surgery"
+        
+        # Update chief complaint if not set
+        if not raw_intake.get("chief_complaint"):
+            raw_intake["chief_complaint"] = transcript
+        
+        state["raw_intake"] = raw_intake
+        
+    except Exception as e:
+        logger.error(f"Conversation intake error: {e}")
+        state["errors"].append(f"Conversation intake error: {str(e)}")
+    
+    return state
+
+
+def missing_info_detector_node_tool(state: AgentState, **kwargs) -> AgentState:
+    """
+    Missing Info Detector Node: Identifies missing required fields.
+    
+    This node calls the missing_field_detector service to identify
+    missing fields and calculate confidence score.
+    
+    Args:
+        state: Current agent state
+    
+    Returns:
+        Updated state with missing fields and confidence score
+    """
+    logger.info("Agent Tool: missing_info_detector_node_tool")
+    
+    state["reasoning_trace"].append({
+        "node": "missing_info_detector",
+        "action": "Detecting missing required fields",
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    try:
+        from services.missing_field_detector import detect_missing_fields
+        
+        raw_intake = state.get("raw_intake", {})
+        appointment_type = raw_intake.get("appointment_type", "")
+        
+        # Detect missing fields
+        result = detect_missing_fields(raw_intake, appointment_type)
+        
+        # Update conversation_data
+        conversation_data = state.get("conversation_data", {})
+        conversation_data["missing_fields"] = result["missing_fields"]
+        conversation_data["confidence_score"] = result["confidence_score"]
+        conversation_data["confidence_scores"] = result["confidence_scores"]
+        conversation_data["suggested_options"] = result["suggested_options"]
+        
+        state["conversation_data"] = conversation_data
+        
+        state["reasoning_trace"].append({
+            "node": "missing_info_detector",
+            "action": "Missing field detection complete",
+            "missing_count": len(result["missing_fields"]),
+            "confidence": result["confidence_score"],
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        logger.info(
+            f"Missing fields: {len(result['missing_fields'])}, "
+            f"Confidence: {result['confidence_score']:.2f}"
+        )
+        
+    except Exception as e:
+        logger.error(f"Missing info detector error: {e}")
+        state["errors"].append(f"Missing info detector error: {str(e)}")
+        # Set default values to prevent downstream errors
+        if "conversation_data" not in state:
+            state["conversation_data"] = {}
+        state["conversation_data"]["missing_fields"] = []
+        state["conversation_data"]["confidence_score"] = 1.0
+    
+    return state
+
+
+def clarification_agent_node_tool(state: AgentState, **kwargs) -> AgentState:
+    """
+    Clarification Agent Node: Generates follow-up questions for missing fields.
+    
+    This node generates intelligent follow-up questions based on
+    missing fields identified by the missing_info_detector.
+    
+    Args:
+        state: Current agent state
+    
+    Returns:
+        Updated state with follow-up questions in draft_message
+    """
+    logger.info("Agent Tool: clarification_agent_node_tool")
+    
+    state["reasoning_trace"].append({
+        "node": "clarification_agent",
+        "action": "Generating follow-up questions",
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    try:
+        conversation_data = state.get("conversation_data", {})
+        missing_fields = conversation_data.get("missing_fields", [])
+        suggested_options = conversation_data.get("suggested_options", {})
+        
+        if not missing_fields:
+            # No missing fields, no clarification needed
+            state["draft_message"] = ""
+            return state
+        
+        # Generate follow-up questions
+        questions = []
+        
+        for field in missing_fields:
+            if field == "chief_complaint":
+                questions.append("What is the main reason for your visit?")
+            elif field == "appointment_type":
+                questions.append("What type of appointment do you need?")
+                if "appointment_type" in suggested_options:
+                    questions.append(f"Options: {', '.join(suggested_options['appointment_type'])}")
+            elif field == "symptoms_description":
+                questions.append("Can you describe your symptoms in more detail?")
+            elif field == "age_group":
+                questions.append("What is your age group?")
+                if "age_group" in suggested_options:
+                    questions.append(f"Options: {', '.join(suggested_options['age_group'])}")
+            elif field == "current_medications":
+                questions.append("Are you currently taking any medications?")
+            elif field == "allergies":
+                questions.append("Do you have any allergies?")
+        
+        # Combine questions
+        clarification_message = "\n\n".join(questions)
+        state["draft_message"] = clarification_message
+        
+        state["reasoning_trace"].append({
+            "node": "clarification_agent",
+            "action": "Follow-up questions generated",
+            "question_count": len(questions),
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        logger.info(f"Generated {len(questions)} follow-up questions")
+        
+    except Exception as e:
+        logger.error(f"Clarification agent error: {e}")
+        state["errors"].append(f"Clarification agent error: {str(e)}")
+        state["draft_message"] = "Please provide more information about your appointment needs."
+    
+    return state
+
+
+def hospital_suggestion_node_tool(state: AgentState, **kwargs) -> AgentState:
+    """
+    Hospital Suggestion Node: Suggests nearby hospitals based on procedure.
+    
+    This node calls the hospital_lookup_service to find and rank
+    hospitals suitable for the patient's procedure.
+    
+    Args:
+        state: Current agent state
+    
+    Returns:
+        Updated state with hospital_data populated
+    """
+    logger.info("Agent Tool: hospital_suggestion_node_tool")
+    
+    state["reasoning_trace"].append({
+        "node": "hospital_suggestion",
+        "action": "Searching for suitable hospitals",
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    try:
+        from services.hospital_lookup_service import HospitalLookupService
+        
+        raw_intake = state.get("raw_intake", {})
+        procedure = raw_intake.get("procedure", "")
+        
+        if not procedure:
+            logger.warning("No procedure specified, skipping hospital lookup")
+            state["hospital_data"] = {"hospitals": []}
+            return state
+        
+        # Initialize hospital lookup service in mock mode
+        hospital_service = HospitalLookupService(mock_mode=True)
+        
+        # Search for hospitals
+        hospitals = hospital_service.search_hospitals(procedure)
+        
+        # Extract doctors from hospitals
+        all_doctors = []
+        for hospital in hospitals:
+            doctors = hospital.get("doctors", [])
+            all_doctors.extend(doctors)
+        
+        # Update hospital_data
+        state["hospital_data"] = {
+            "hospitals": hospitals,
+            "selected_hospital": None,
+            "doctors": all_doctors,
+            "selected_doctor": None,
+            "selected_slot": None
+        }
+        
+        state["reasoning_trace"].append({
+            "node": "hospital_suggestion",
+            "action": "Hospital search complete",
+            "hospital_count": len(hospitals),
+            "doctor_count": len(all_doctors),
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        logger.info(f"Found {len(hospitals)} hospitals with {len(all_doctors)} doctors")
+        
+    except Exception as e:
+        logger.error(f"Hospital suggestion error: {e}")
+        state["errors"].append(f"Hospital suggestion error: {str(e)}")
+        state["hospital_data"] = {"hospitals": []}
+    
+    return state
+
+
+def scheduling_orchestrator_node_tool(state: AgentState, **kwargs) -> AgentState:
+    """
+    Scheduling Orchestrator Node: Manages appointment scheduling.
+    
+    This node is a pass-through for now. Actual scheduling is handled
+    by the /api/book-appointment route after user selects doctor and slot.
+    
+    Args:
+        state: Current agent state
+    
+    Returns:
+        Updated state
+    """
+    logger.info("Agent Tool: scheduling_orchestrator_node_tool")
+    
+    state["reasoning_trace"].append({
+        "node": "scheduling_orchestrator",
+        "action": "Scheduling orchestration (pass-through)",
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    # This node is a placeholder for now
+    # Actual scheduling happens in the booking API route
     
     return state

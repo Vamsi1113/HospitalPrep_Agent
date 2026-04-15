@@ -3,17 +3,17 @@ LLM Client for OpenRouter API integration with graceful fallback.
 
 This module provides a safe interface to OpenRouter's API for message rewriting.
 Uses a 4-tier fallback system with free models:
-1. google/gemma-4-31b-it:free (Primary)
-2. google/gemma-4-26b-a4b-it:free (Fallback 1)
-3. nvidia/nemotron-3-super-120b-a12b:free (Fallback 2)
-4. meta-llama/llama-3.3-70b-instruct:free (Fallback 3)
+1. nvidia/nemotron-3-super-120b-a12b:free (Primary - 120B parameters)
+2. arcee-ai/trinity-large-preview:free (Fallback 1)
+3. openai/gpt-oss-120b:free (Fallback 2 - 120B parameters)
+4. nvidia/nemotron-3-nano-30b-a3b:free (Fallback 3 - 30B parameters)
 5. Template-based responses (Final fallback)
 
 The client handles API failures gracefully by returning None, allowing the
 system to fall back to template-based message generation.
 
 Key Safety Features:
-- Timeout handling (5 seconds) for all API calls
+- Timeout handling (60 seconds) for all API calls
 - Four-tier model fallback chain
 - Graceful error handling with None returns
 - System prompts that prevent medical instruction invention
@@ -23,6 +23,9 @@ Key Safety Features:
 
 from typing import Optional
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class LLMClient:
@@ -38,7 +41,7 @@ class LLMClient:
     Attributes:
         api_key: OpenRouter API key (None if unavailable)
         available: Boolean indicating if LLM is available for use
-        timeout: Timeout in seconds for API calls (default: 5)
+        timeout: Timeout in seconds for API calls (default: 60)
         models: List of models to try in order (4-tier fallback)
     """
     
@@ -49,12 +52,12 @@ class LLMClient:
         
         Args:
             api_key: OpenRouter API key. If None, client operates in fallback mode.
-            timeout: Timeout in seconds for API calls (default: 5)
+            timeout: Timeout in seconds for API calls (default: 60)
             models: List of models to try in order. If None, uses default 4-tier fallback:
-                   1. google/gemma-4-31b-it:free
-                   2. google/gemma-4-26b-a4b-it:free
-                   3. nvidia/nemotron-3-super-120b-a12b:free
-                   4. meta-llama/llama-3.3-70b-instruct:free
+                   1. nvidia/nemotron-3-super-120b-a12b:free
+                   2. arcee-ai/trinity-large-preview:free
+                   3. openai/gpt-oss-120b:free
+                   4. nvidia/nemotron-3-nano-30b-a3b:free
         
         Postconditions:
             - self.available is True if api_key is not None and not empty
@@ -66,13 +69,13 @@ class LLMClient:
         self.available = api_key is not None and api_key.strip() != ""
         self.timeout = timeout
         
-        # Default 4-tier fallback chain
+        # Default 4-tier fallback chain with specified models
         if models is None:
             self.models = [
-                "google/gemma-4-31b-it:free",
-                "google/gemma-4-26b-a4b-it:free",
                 "nvidia/nemotron-3-super-120b-a12b:free",
-                "meta-llama/llama-3.3-70b-instruct:free"
+                "arcee-ai/trinity-large-preview:free",
+                "openai/gpt-oss-120b:free",
+                "nvidia/nemotron-3-nano-30b-a3b:free"
             ]
         else:
             self.models = models
@@ -89,8 +92,9 @@ class LLMClient:
                     base_url="https://openrouter.ai/api/v1",
                     timeout=self.timeout
                 )
-            except Exception:
+            except Exception as e:
                 # If OpenAI import or initialization fails, mark as unavailable
+                logger.warning(f"Failed to initialize OpenAI client: {e}")
                 self.available = False
                 self._client = None
     
@@ -156,6 +160,8 @@ class LLMClient:
         # Try each model in the fallback chain
         for i, model in enumerate(self.models):
             try:
+                logger.info(f"Trying model {i+1}/{len(self.models)}: {model}")
+                
                 response = self._client.chat.completions.create(
                     model=model,
                     messages=[
@@ -171,22 +177,19 @@ class LLMClient:
                 
                 # Validate that we got a non-empty response
                 if rewritten and rewritten.strip():
-                    if i > 0:
-                        # Log success if using fallback model
-                        logger.info(f"Model {model} (fallback #{i}) succeeded")
+                    logger.info(f"Model {model} succeeded (attempt {i+1}/{len(self.models)})")
                     return rewritten.strip()
                     
             except Exception as e:
                 # Log warning and try next model
-                import logging
-                logger = logging.getLogger(__name__)
-                
+                error_type = type(e).__name__
                 if i < len(self.models) - 1:
-                    logger.warning(f"Model {model} failed: {type(e).__name__}, trying next model")
+                    logger.warning(f"Model {model} failed: {error_type}, trying next model")
                 else:
-                    logger.warning(f"All {len(self.models)} models failed, using template fallback")
+                    logger.warning(f"All {len(self.models)} models failed")
         
         # All models failed, return None to trigger template fallback
+        logger.info("Using template-based fallback")
         return None
     
     def generate_with_prompt(self, system_prompt: str, user_content: str) -> Optional[str]:
@@ -227,6 +230,8 @@ class LLMClient:
         # Try each model in the fallback chain
         for i, model in enumerate(self.models):
             try:
+                logger.info(f"Trying model {i+1}/{len(self.models)}: {model}")
+                
                 response = self._client.chat.completions.create(
                     model=model,
                     messages=[
@@ -242,20 +247,17 @@ class LLMClient:
                 
                 # Validate that we got a non-empty response
                 if generated and generated.strip():
-                    if i > 0:
-                        # Log success if using fallback model
-                        logger.info(f"Model {model} (fallback #{i}) succeeded")
+                    logger.info(f"Model {model} succeeded (attempt {i+1}/{len(self.models)})")
                     return generated.strip()
                     
             except Exception as e:
                 # Log warning and try next model
-                import logging
-                logger = logging.getLogger(__name__)
-                
+                error_type = type(e).__name__
                 if i < len(self.models) - 1:
-                    logger.warning(f"Model {model} failed: {type(e).__name__}, trying next model")
+                    logger.warning(f"Model {model} failed: {error_type}, trying next model")
                 else:
                     logger.warning(f"All {len(self.models)} models failed")
         
         # All models failed, return None
+        logger.info("Using template-based fallback")
         return None

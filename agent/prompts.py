@@ -40,7 +40,11 @@ def build_prep_prompt(context: dict) -> Tuple[str, str]:
     conditions_str = ", ".join(conditions)  if conditions else "None reported"
     
     hospitals = context.get("hospital_data", {}).get("suggested_hospitals", [])
-    hospitals_str = "\n".join([f"- {h['name']} ({h['rating']} stars) - {h['location']} - {h['specialty']}" for h in hospitals]) if hospitals else "No specific suggestions found."
+    # Hospitals have 'name', 'location', 'rating', 'capabilities' - not 'specialty'
+    hospitals_str = "\n".join([
+        f"- {h.get('name', 'Hospital')} ({h.get('rating', 0)} stars) - {h.get('location', 'Location')}"
+        for h in hospitals
+    ]) if hospitals else "No specific suggestions found."
 
     prep_hints = _get_procedure_hints(procedure, apt_type)
 
