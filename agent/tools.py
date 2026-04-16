@@ -1899,8 +1899,9 @@ def hospital_suggestion_node(state: AgentState, **kwargs) -> AgentState:
             state["hospital_data"] = {"hospitals": [], "suggested_hospitals": []}
             return state
         
-        # Initialize hospital lookup service in mock mode
-        hospital_service = HospitalLookupService(mock_mode=True)
+        # Initialize hospital lookup service in REAL mode
+        hospital_service = HospitalLookupService(mock_mode=False)
+        logger.info("[HOSPITAL LOOKUP] Using REAL mode (Geoapify)")
         
         # Search for hospitals
         hospitals = hospital_service.search_hospitals(procedure)
@@ -2228,8 +2229,9 @@ def hospital_suggestion_node_tool(state: AgentState, **kwargs) -> AgentState:
             state["hospital_data"] = {"hospitals": []}
             return state
         
-        # Initialize hospital lookup service in mock mode
-        hospital_service = HospitalLookupService(mock_mode=True)
+        # Initialize hospital lookup service in REAL mode
+        hospital_service = HospitalLookupService(mock_mode=False)
+        logger.info("[HOSPITAL LOOKUP] Using REAL mode (Geoapify)")
         
         # Search for hospitals
         hospitals = hospital_service.search_hospitals(procedure)
@@ -2292,3 +2294,99 @@ def scheduling_orchestrator_node_tool(state: AgentState, **kwargs) -> AgentState
     # Actual scheduling happens in the booking API route
     
     return state
+
+
+
+# ============================================================================
+# VOICE INTAKE EXTRACTION
+# ============================================================================
+
+def extract_intake_from_transcript(transcript: str, llm_client) -> dict:
+    """
+    Extract structured intake fields from voice transcript using LLM.
+    
+    Args:
+        transcript: Raw voice transcript text
+        llm_client: LLM client for extraction
+    
+    Returns:
+        Dict with extracted fields (name, age, symptoms, etc.)
+    """
+    logger.info("Extracting intake from transcript")
+    
+    if not transcript or not transcript.strip():
+        return {"error": "Empty transcript"}
+    
+    if not llm_client or not llm_client.is_available():
+        # Fallback: return transcript as chief_complaint
+        return {
+            "chief_complaint": transcript,
+            "symptoms_description": transcript
+        }
+    
+    system_prompt = (
+        "You are a medical intake assistant. Extract patient information from the transcript. "
+        "Return ONLY valid JSON with these keys: name, age, gender, chief_complaint, "
+        "symptoms_description, duration, procedure_type, current_medications, allergies, "
+        "prior_conditions. Use null for missing fields. No explanation, no markdown, only JSON."
+    )
+    
+    user_prompt = f"Transcript: {transcript}"
+    
+    try:
+        response = llm_client.generate_with_prompt(system_prompt, user_prompt)
+        
+        if not response:
+            # LLM failed, return basic extraction
+            return {
+                "chief_complaint": transcript,
+                "symptoms_description": transcript
+            }
+        
+        # Try to parse JSON from response
+        import json
+        import re
+        
+        # Extract JSON from response (handle markdown code blocks)
+        json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(1)
+        else:
+            # Try to find JSON object directly
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+            else:
+                json_str = response
+        
+        extracted = json.loads(json_str)
+        
+        # Ensure all expected keys exist
+        result = {
+            "name": extracted.get("name"),
+            "age": extracted.get("age"),
+            "gender": extracted.get("gender"),
+            "chief_complaint": extracted.get("chief_complaint") or transcript,
+            "symptoms_description": extracted.get("symptoms_description") or transcript,
+            "duration": extracted.get("duration"),
+            "procedure_type": extracted.get("procedure_type"),
+            "current_medications": extracted.get("current_medications") or [],
+            "allergies": extracted.get("allergies") or [],
+            "prior_conditions": extracted.get("prior_conditions") or []
+        }
+        
+        logger.info(f"Successfully extracted intake fields from transcript")
+        return result
+        
+    except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse JSON from LLM response: {e}")
+        return {
+            "chief_complaint": transcript,
+            "symptoms_description": transcript
+        }
+    except Exception as e:
+        logger.error(f"Extraction error: {e}")
+        return {
+            "chief_complaint": transcript,
+            "symptoms_description": transcript
+        }

@@ -55,9 +55,20 @@ retrieval_service = ProtocolRetrieval(protocols_dir="data/protocols")
 calendar_service = CalendarService()
 sms_service = SMSService()
 email_service = EmailService()
-voice_service = VoiceService(mock_mode=True)
-hospital_lookup_service = HospitalLookupService(mock_mode=True)
+voice_service = VoiceService(mock_mode=False)  # Use real Web Speech API
+hospital_lookup_service = HospitalLookupService(mock_mode=False)  # Use real Geoapify
 storage = StorageService()
+
+# Log service initialization modes
+app.logger.info("=" * 60)
+app.logger.info("SERVICE INITIALIZATION STATUS")
+app.logger.info("=" * 60)
+app.logger.info(f"HOSPITAL MODE: {'REAL (Geoapify)' if hospital_lookup_service.use_real_api else 'MOCK'}")
+app.logger.info(f"EMAIL MODE: {'REAL (Gmail)' if email_service.use_gmail else 'REAL (SendGrid)' if email_service.use_sendgrid else 'MOCK'}")
+app.logger.info(f"SMS MODE: {'REAL (Fast2SMS)' if sms_service.use_fast2sms else 'REAL (Twilio)' if sms_service.use_twilio else 'MOCK'}")
+app.logger.info(f"CALENDAR MODE: {'REAL (Google)' if calendar_service.use_real_calendar else 'MOCK'}")
+app.logger.info(f"VOICE MODE: {'REAL (Browser API)' if not voice_service.mock_mode else 'MOCK'}")
+app.logger.info("=" * 60)
 
 # Initialize database on startup
 storage.init_db()
@@ -790,7 +801,7 @@ def analyze_intake():
     """
     Analyze intake data and perform triage (Step 2 of wizard).
     
-    Expects JSON with intake data (chief_complaint, symptoms, etc.)
+    Expects JSON with intake data (chief_complaint, symptoms, lat, lng, etc.)
     
     Returns JSON with:
     - error: Boolean indicating success/failure
@@ -812,53 +823,102 @@ def analyze_intake():
                 "messages": ["No data provided"]
             }), 400
         
-        # Import agent tools directly for partial workflow
-        from agent.state import create_initial_state
-        from agent.tools import (
-            intake_node_tool,
-            triage_node_tool,
-            hospital_suggestion_node
-        )
+        # Extract location if provided
+        lat = data.get("lat")
+        lng = data.get("lng")
+        location = (lat, lng) if lat and lng else None
         
-        # Create initial state
-        state = create_initial_state(data)
-        
-        # Run partial workflow: intake -> triage -> hospital_suggestion
-        state = intake_node_tool(state, llm_client)
-        state = triage_node_tool(state)
-        state = hospital_suggestion_node(state)
-        
-        # Check for errors
-        if state.get("errors"):
-            app.logger.error(f"Analysis error: {state['errors']}")
-            return jsonify({
-                "error": True,
-                "messages": state["errors"]
-            }), 500
-        
-        # Extract triage and hospital data
-        triage_data = state.get("triage_data", {})
-        hospital_data = state.get("hospital_data", {})
-        
-        # Map to UI-expected format
-        urgency = triage_data.get("urgency_level", "routine")
-        red_flags = triage_data.get("red_flags", [])
+        # DEBUG: Log location data
+        app.logger.info(f"[DEBUG /api/analyze] lat={lat}, lng={lng}, location={location}")
         
         # Determine specialty from procedure or chief complaint
         procedure = data.get("procedure", "").lower()
         chief_complaint = data.get("chief_complaint", "").lower()
         
+        # DEBUG: Log procedure and chief complaint
+        app.logger.info(f"[DEBUG /api/analyze] procedure='{procedure}', chief_complaint='{chief_complaint}'")
+        
         specialty = "General Medicine"
-        if "cardio" in procedure or "heart" in chief_complaint or "chest" in chief_complaint:
+        specialty_keyword = None
+        
+        if "cardio" in procedure or "cardiac" in procedure or "heart" in chief_complaint or "chest" in chief_complaint:
             specialty = "Cardiology"
+            specialty_keyword = "cardiology"
         elif "colon" in procedure or "endoscopy" in procedure:
             specialty = "Gastroenterology"
-        elif "mri" in procedure or "ct" in procedure or "imaging" in procedure:
+            specialty_keyword = "gastroenterology"
+        elif "mri" in procedure or "ct" in procedure or "imaging" in procedure or "scan" in procedure:
             specialty = "Radiology"
-        elif "surgery" in procedure:
+            specialty_keyword = "radiology"
+        elif "surgery" in procedure or "surgical" in procedure:
             specialty = "Surgery"
+            specialty_keyword = "surgery"
         
-        app.logger.info(f"Analysis complete: urgency={urgency}, specialty={specialty}, doctors={len(hospital_data.get('doctors', []))}")
+        # DEBUG: Log specialty determination
+        app.logger.info(f"[DEBUG /api/analyze] specialty='{specialty}', specialty_keyword='{specialty_keyword}'")
+        
+        # Search hospitals with real API if location available
+        if location and specialty_keyword:
+            app.logger.info("[DEBUG /api/analyze] Taking REAL API path (Geoapify)")
+            from services.hospital_lookup_service import HospitalLookupService
+            
+            hospital_service = HospitalLookupService(mock_mode=False)
+            
+            hospitals = hospital_service.search_hospitals(
+                procedure=specialty_keyword,
+                location=location,
+                radius_km=10.0
+            )
+            
+            # Extract doctors from hospitals
+            all_doctors = []
+            for hospital in hospitals:
+                doctors = hospital.get("doctors", [])
+                all_doctors.extend(doctors)
+        else:
+            app.logger.info("[DEBUG /api/analyze] Taking AGENT WORKFLOW path (fallback)")
+            app.logger.info(f"[DEBUG /api/analyze] Reason: location={location is not None}, specialty_keyword={specialty_keyword is not None}")
+            # Fallback to agent workflow
+            from agent.state import create_initial_state
+            from agent.tools import (
+                intake_node_tool,
+                triage_node_tool,
+                hospital_suggestion_node
+            )
+            
+            state = create_initial_state(data)
+            state = intake_node_tool(state, llm_client)
+            state = triage_node_tool(state)
+            state = hospital_suggestion_node(state)
+            
+            if state.get("errors"):
+                app.logger.error(f"Analysis error: {state['errors']}")
+                return jsonify({
+                    "error": True,
+                    "messages": state["errors"]
+                }), 500
+            
+            triage_data = state.get("triage_data", {})
+            hospital_data = state.get("hospital_data", {})
+            urgency = triage_data.get("urgency_level", "routine")
+            red_flags = triage_data.get("red_flags", [])
+            all_doctors = hospital_data.get("doctors", [])
+        
+        # Determine urgency from symptoms (simple heuristic)
+        urgency = "routine"
+        red_flags = []
+        
+        if "chest" in chief_complaint and "pain" in chief_complaint:
+            urgency = "urgent"
+            red_flags.append("Chest pain - requires urgent evaluation")
+        elif "breath" in chief_complaint or "breathing" in chief_complaint:
+            urgency = "urgent"
+            red_flags.append("Difficulty breathing")
+        elif "severe" in chief_complaint and "pain" in chief_complaint:
+            urgency = "urgent"
+            red_flags.append("Severe pain")
+        
+        app.logger.info(f"Analysis complete: urgency={urgency}, specialty={specialty}, doctors={len(all_doctors)}")
         
         return jsonify({
             "error": False,
@@ -867,7 +927,7 @@ def analyze_intake():
                 "specialty": specialty,
                 "red_flags": red_flags
             },
-            "doctors": hospital_data.get("doctors", [])
+            "doctors": all_doctors
         }), 200
     
     except Exception as e:
@@ -954,6 +1014,85 @@ def book_appointment():
         import uuid
         confirmation_id = f"PREP-{uuid.uuid4().hex[:8].upper()}"
         
+        # Extract patient info
+        patient_name = intake_data.get("patient_name", "Patient")
+        patient_email = intake_data.get("email", "")
+        patient_phone = intake_data.get("phone", "")
+        doctor_name = selected_doctor.get("name", "Doctor")
+        hospital_name = selected_doctor.get("hospital", "Hospital")
+        hospital_location = selected_doctor.get("hospital_location", "")
+        appointment_datetime = selected_slot.get("datetime_display", "")
+        prep_message = result.get("patient_message", "")
+        
+        # Create calendar event if configured
+        try:
+            event_id = calendar_service.create_appointment_event(
+                title=f"{intake_data.get('appointment_type', 'Appointment')} - {patient_name}",
+                start_time=selected_slot.get("datetime_iso", ""),
+                end_time=selected_slot.get("datetime_iso", ""),
+                description=f"Procedure: {intake_data.get('procedure', 'N/A')}\nDoctor: {doctor_name}",
+                attendee_email=patient_email if patient_email else "",
+                location=f"{hospital_name}, {hospital_location}"
+            )
+            app.logger.info(f"Calendar event created: {event_id}")
+        except Exception as e:
+            app.logger.warning(f"Calendar event creation failed: {e}")
+        
+        # Send confirmation email to patient
+        if patient_email:
+            try:
+                email_result = email_service.send_booking_confirmation(
+                    to_email=patient_email,
+                    patient_name=patient_name,
+                    appointment_datetime=appointment_datetime,
+                    doctor=doctor_name,
+                    location=f"{hospital_name}, {hospital_location}",
+                    prep_summary=prep_message[:500] + "..." if len(prep_message) > 500 else prep_message
+                )
+                app.logger.info(f"Patient confirmation email sent: {email_result.get('message_id')}")
+            except Exception as e:
+                app.logger.warning(f"Patient email failed: {e}")
+        
+        # Send notification email to hospital
+        hospital_notify_email = os.getenv("HOSPITAL_NOTIFY_EMAIL", "")
+        if hospital_notify_email:
+            try:
+                hospital_email_result = email_service.send_email(
+                    to_email=hospital_notify_email,
+                    subject=f"New Appointment Booked - {patient_name}",
+                    html_content=f"""
+                    <html>
+                    <body style="font-family: Arial, sans-serif;">
+                        <h2>New Appointment Notification</h2>
+                        <p><strong>Patient:</strong> {patient_name}</p>
+                        <p><strong>Doctor:</strong> {doctor_name}</p>
+                        <p><strong>Hospital:</strong> {hospital_name}</p>
+                        <p><strong>Date/Time:</strong> {appointment_datetime}</p>
+                        <p><strong>Procedure:</strong> {intake_data.get('procedure', 'N/A')}</p>
+                        <p><strong>Chief Complaint:</strong> {intake_data.get('chief_complaint', 'N/A')}</p>
+                        <p><strong>Confirmation ID:</strong> {confirmation_id}</p>
+                    </body>
+                    </html>
+                    """,
+                    plain_content=f"New appointment booked for {patient_name} with {doctor_name} on {appointment_datetime}"
+                )
+                app.logger.info(f"Hospital notification email sent: {hospital_email_result.get('message_id')}")
+            except Exception as e:
+                app.logger.warning(f"Hospital notification email failed: {e}")
+        
+        # Send confirmation SMS to patient
+        if patient_phone:
+            try:
+                sms_result = sms_service.send_booking_confirmation(
+                    to_phone=patient_phone,
+                    appointment_datetime=appointment_datetime,
+                    doctor=doctor_name,
+                    location=f"{hospital_name}, {hospital_location}"
+                )
+                app.logger.info(f"Patient confirmation SMS sent: {sms_result.get('message_id')}")
+            except Exception as e:
+                app.logger.warning(f"Patient SMS failed: {e}")
+        
         app.logger.info(f"Booking complete: confirmation_id={confirmation_id}")
         
         return jsonify({
@@ -961,9 +1100,9 @@ def book_appointment():
             "booking_confirmed": True,
             "booking": {
                 "confirmation_id": confirmation_id,
-                "doctor_name": selected_doctor.get("name", "Doctor"),
-                "hospital": selected_doctor.get("hospital", "Hospital"),
-                "date_time": selected_slot.get("datetime_display", "")
+                "doctor_name": doctor_name,
+                "hospital": hospital_name,
+                "date_time": appointment_datetime
             },
             "patient_message": result.get("patient_message", ""),
             "clinician_summary": result.get("clinician_summary", ""),
@@ -975,6 +1114,56 @@ def book_appointment():
         return jsonify({
             "error": True,
             "messages": ["Failed to book appointment. Please try again."]
+        }), 500
+
+
+@app.route('/api/extract-intake', methods=['POST'])
+def extract_intake():
+    """
+    Extract structured intake fields from voice transcript using LLM.
+    
+    Expects JSON with:
+    - transcript: Raw voice transcript text
+    
+    Returns JSON with extracted fields or error.
+    """
+    try:
+        app.logger.info("Extract intake request received")
+        
+        data = request.get_json()
+        
+        if not data or not data.get("transcript"):
+            return jsonify({
+                "error": True,
+                "messages": ["No transcript provided"]
+            }), 400
+        
+        transcript = data["transcript"]
+        
+        # Import extraction function
+        from agent.tools import extract_intake_from_transcript
+        
+        # Extract fields using LLM
+        extracted = extract_intake_from_transcript(transcript, llm_client)
+        
+        if extracted.get("error"):
+            return jsonify({
+                "error": True,
+                "messages": [extracted["error"]]
+            }), 400
+        
+        app.logger.info(f"Successfully extracted intake from transcript")
+        
+        return jsonify({
+            "error": False,
+            "extracted": extracted
+        }), 200
+    
+    except Exception as e:
+        app.logger.error(f"Extract intake error: {type(e).__name__}: {str(e)}")
+        return jsonify({
+            "error": True,
+            "messages": ["Failed to extract intake. Please try again."]
         }), 500
 
 

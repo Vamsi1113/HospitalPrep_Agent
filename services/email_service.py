@@ -1,40 +1,81 @@
 """
 services/email_service.py
 
-SendGrid email integration for appointment prep instructions.
+Email integration supporting both Gmail API and SendGrid.
 Falls back to console logging when credentials not configured.
-Set SENDGRID_API_KEY and SENDGRID_FROM_EMAIL in .env to enable.
 """
 
 import os
 from datetime import datetime
 from typing import Optional, List
+import base64
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class EmailService:
     
     def __init__(self):
-        self.api_key = os.getenv("SENDGRID_API_KEY", "")
-        self.from_email = os.getenv("SENDGRID_FROM_EMAIL", "noreply@clinic.example.com")
-        self.use_real_email = bool(self.api_key)
-        self._client = None
+        # Gmail API configuration
+        self.gmail_sender = os.getenv("GMAIL_SENDER_ADDRESS", "")
+        self.gmail_creds_path = os.getenv("GMAIL_OAUTH_CREDENTIALS_JSON", "")
         
-        if self.use_real_email:
+        # SendGrid configuration
+        self.sendgrid_api_key = os.getenv("SENDGRID_API_KEY", "")
+        self.sendgrid_from_email = os.getenv("SENDGRID_FROM_EMAIL", "noreply@clinic.example.com")
+        
+        # Determine which service to use
+        self.use_gmail = bool(self.gmail_sender and self.gmail_creds_path)
+        self.use_sendgrid = bool(self.sendgrid_api_key) and not self.use_gmail
+        self.use_real_email = self.use_gmail or self.use_sendgrid
+        
+        self._gmail_service = None
+        self._sendgrid_client = None
+        
+        if self.use_gmail:
+            self._init_gmail()
+        elif self.use_sendgrid:
             self._init_sendgrid()
+        
+        logger.info(f"EmailService initialized (gmail={self.use_gmail}, sendgrid={self.use_sendgrid})")
+    
+    def _init_gmail(self):
+        """Initialize Gmail API client."""
+        try:
+            from google.oauth2 import service_account
+            from googleapiclient.discovery import build
+            
+            SCOPES = ['https://www.googleapis.com/auth/gmail.send']
+            
+            credentials = service_account.Credentials.from_service_account_file(
+                self.gmail_creds_path,
+                scopes=SCOPES
+            )
+            
+            self._gmail_service = build('gmail', 'v1', credentials=credentials)
+            logger.info("Gmail API initialized successfully")
+            
+        except Exception as e:
+            logger.warning(f"Gmail API init failed: {e}. Using mock.")
+            self.use_gmail = False
+            self.use_real_email = False
     
     def _init_sendgrid(self):
         """Initialize SendGrid client."""
         try:
             from sendgrid import SendGridAPIClient
-            self._client = SendGridAPIClient(self.api_key)
+            self._sendgrid_client = SendGridAPIClient(self.sendgrid_api_key)
+            logger.info("SendGrid initialized successfully")
         except Exception as e:
-            print(f"[EmailService] SendGrid init failed: {e}. Using mock.")
+            logger.warning(f"SendGrid init failed: {e}. Using mock.")
+            self.use_sendgrid = False
             self.use_real_email = False
     
     def send_email(self, to_email: str, subject: str, 
                   html_content: str, plain_content: str = "") -> dict:
         """
-        Send email. Uses real SendGrid if configured,
+        Send email. Routes to Gmail or SendGrid based on configuration,
         otherwise logs to console.
         
         Args:
@@ -46,18 +87,59 @@ class EmailService:
         Returns:
             dict with status, message_id, and timestamp
         """
-        if self.use_real_email:
-            return self._send_real_email(to_email, subject, html_content, plain_content)
+        if self.use_gmail:
+            return self._send_gmail_email(to_email, subject, html_content, plain_content)
+        elif self.use_sendgrid:
+            return self._send_sendgrid_email(to_email, subject, html_content, plain_content)
         return self._send_mock_email(to_email, subject, html_content)
     
-    def _send_real_email(self, to_email: str, subject: str,
-                        html_content: str, plain_content: str) -> dict:
+    def _send_gmail_email(self, to_email: str, subject: str,
+                         html_content: str, plain_content: str) -> dict:
+        """Send email via Gmail API."""
+        try:
+            from email.mime.text import MIMEText
+            from email.mime.multipart import MIMEMultipart
+            
+            message = MIMEMultipart('alternative')
+            message['To'] = to_email
+            message['From'] = self.gmail_sender
+            message['Subject'] = subject
+            
+            if plain_content:
+                message.attach(MIMEText(plain_content, 'plain'))
+            message.attach(MIMEText(html_content, 'html'))
+            
+            raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8')
+            
+            result = self._gmail_service.users().messages().send(
+                userId='me',
+                body={'raw': raw_message}
+            ).execute()
+            
+            return {
+                "success": True,
+                "message_id": result.get('id', 'unknown'),
+                "status_code": 200,
+                "timestamp": datetime.now().isoformat(),
+                "provider": "gmail"
+            }
+        except Exception as e:
+            logger.error(f"Gmail send failed: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "timestamp": datetime.now().isoformat(),
+                "provider": "gmail"
+            }
+    
+    def _send_sendgrid_email(self, to_email: str, subject: str,
+                            html_content: str, plain_content: str) -> dict:
         """Send email via SendGrid API."""
         try:
             from sendgrid.helpers.mail import Mail, Content
             
             message = Mail(
-                from_email=self.from_email,
+                from_email=self.sendgrid_from_email,
                 to_emails=to_email,
                 subject=subject,
                 html_content=html_content
@@ -66,7 +148,7 @@ class EmailService:
             if plain_content:
                 message.add_content(Content("text/plain", plain_content))
             
-            response = self._client.send(message)
+            response = self._sendgrid_client.send(message)
             
             return {
                 "success": True,
@@ -76,7 +158,7 @@ class EmailService:
                 "provider": "sendgrid"
             }
         except Exception as e:
-            print(f"[EmailService] SendGrid send failed: {e}")
+            logger.error(f"SendGrid send failed: {e}")
             return {
                 "success": False,
                 "error": str(e),

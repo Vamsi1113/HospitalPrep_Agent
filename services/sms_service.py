@@ -1,59 +1,126 @@
 """
 services/sms_service.py
 
-Twilio SMS integration for appointment reminders and notifications.
+SMS integration supporting both Twilio and Fast2SMS.
 Falls back to console logging when credentials not configured.
-Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_PHONE_NUMBER in .env to enable.
 """
 
 import os
 from datetime import datetime
 from typing import Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class SMSService:
     
     def __init__(self):
-        self.account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
-        self.auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
-        self.from_phone = os.getenv("TWILIO_PHONE_NUMBER", "")
-        self.use_real_sms = bool(self.account_sid and self.auth_token and self.from_phone)
-        self._client = None
+        # Twilio configuration
+        self.twilio_account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
+        self.twilio_auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
+        self.twilio_from_phone = os.getenv("TWILIO_PHONE_NUMBER", "")
         
-        if self.use_real_sms:
+        # Fast2SMS configuration
+        self.fast2sms_api_key = os.getenv("FAST2SMS_API_KEY", "")
+        
+        # Determine which service to use (Fast2SMS takes priority if configured)
+        self.use_fast2sms = bool(self.fast2sms_api_key)
+        self.use_twilio = bool(self.twilio_account_sid and self.twilio_auth_token and self.twilio_from_phone) and not self.use_fast2sms
+        self.use_real_sms = self.use_fast2sms or self.use_twilio
+        
+        self._twilio_client = None
+        
+        if self.use_twilio:
             self._init_twilio()
+        
+        logger.info(f"SMSService initialized (fast2sms={self.use_fast2sms}, twilio={self.use_twilio})")
     
     def _init_twilio(self):
         """Initialize Twilio client."""
         try:
             from twilio.rest import Client
-            self._client = Client(self.account_sid, self.auth_token)
+            self._twilio_client = Client(self.twilio_account_sid, self.twilio_auth_token)
+            logger.info("Twilio initialized successfully")
         except Exception as e:
-            print(f"[SMSService] Twilio init failed: {e}. Using mock.")
+            logger.warning(f"Twilio init failed: {e}. Using mock.")
+            self.use_twilio = False
             self.use_real_sms = False
     
     def send_sms(self, to_phone: str, message: str) -> dict:
         """
-        Send SMS message. Uses real Twilio if configured,
+        Send SMS message. Routes to Fast2SMS or Twilio based on configuration,
         otherwise logs to console.
         
         Args:
-            to_phone: Recipient phone number (E.164 format: +1234567890)
+            to_phone: Recipient phone number (E.164 format for Twilio: +1234567890, 10-digit for Fast2SMS)
             message: Message text (max 1600 chars)
         
         Returns:
             dict with status, message_id, and timestamp
         """
-        if self.use_real_sms:
-            return self._send_real_sms(to_phone, message)
+        if self.use_fast2sms:
+            return self._send_fast2sms(to_phone, message)
+        elif self.use_twilio:
+            return self._send_twilio_sms(to_phone, message)
         return self._send_mock_sms(to_phone, message)
     
-    def _send_real_sms(self, to_phone: str, message: str) -> dict:
+    def _send_fast2sms(self, to_phone: str, message: str) -> dict:
+        """Send SMS via Fast2SMS API."""
+        try:
+            import requests
+            
+            # Fast2SMS expects 10-digit Indian phone numbers without country code
+            phone_clean = to_phone.replace("+91", "").replace("+", "").replace("-", "").replace(" ", "")
+            
+            url = "https://www.fast2sms.com/dev/bulkV2"
+            payload = {
+                "route": "q",
+                "message": message,
+                "language": "english",
+                "flash": 0,
+                "numbers": phone_clean
+            }
+            headers = {
+                "authorization": self.fast2sms_api_key,
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Cache-Control": "no-cache"
+            }
+            
+            response = requests.post(url, data=payload, headers=headers, timeout=10)
+            result = response.json()
+            
+            if result.get("return") == True:
+                return {
+                    "success": True,
+                    "message_id": result.get("request_id", "unknown"),
+                    "status": "sent",
+                    "timestamp": datetime.now().isoformat(),
+                    "provider": "fast2sms"
+                }
+            else:
+                logger.error(f"Fast2SMS send failed: {result.get('message')}")
+                return {
+                    "success": False,
+                    "error": result.get("message", "Unknown error"),
+                    "timestamp": datetime.now().isoformat(),
+                    "provider": "fast2sms"
+                }
+        except Exception as e:
+            logger.error(f"Fast2SMS send failed: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "timestamp": datetime.now().isoformat(),
+                "provider": "fast2sms"
+            }
+    
+    def _send_twilio_sms(self, to_phone: str, message: str) -> dict:
         """Send SMS via Twilio API."""
         try:
-            result = self._client.messages.create(
+            result = self._twilio_client.messages.create(
                 body=message,
-                from_=self.from_phone,
+                from_=self.twilio_from_phone,
                 to=to_phone
             )
             return {
@@ -64,7 +131,7 @@ class SMSService:
                 "provider": "twilio"
             }
         except Exception as e:
-            print(f"[SMSService] Twilio send failed: {e}")
+            logger.error(f"Twilio send failed: {e}")
             return {
                 "success": False,
                 "error": str(e),

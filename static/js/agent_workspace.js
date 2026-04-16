@@ -15,6 +15,7 @@ let selectedDoctor   = null;   // selected doctor object
 let selectedSlot     = null;   // selected time slot
 let bookingResult    = null;   // /api/book-appointment response
 let currentResPane   = 'patient';
+let userLocation     = null;   // { lat, lng } from geolocation
 
 const $ = id => document.getElementById(id);
 
@@ -132,6 +133,17 @@ async function handleAnalyze() {
     btn.disabled = true;
     btn.innerHTML = '<div class="spinner-sm"></div> Analyzing...';
 
+    // Get user location if not already captured
+    if (!userLocation) {
+        await captureUserLocation();
+    }
+
+    // Attach location to intake if available
+    if (userLocation) {
+        intake.lat = userLocation.lat;
+        intake.lng = userLocation.lng;
+    }
+
     try {
         const res  = await fetch('/api/analyze', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -156,6 +168,37 @@ async function handleAnalyze() {
         btn.disabled = false;
         btn.innerHTML = origText;
     }
+}
+
+async function captureUserLocation() {
+    if (!navigator.geolocation) {
+        console.warn('Geolocation not supported');
+        return;
+    }
+
+    return new Promise((resolve) => {
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                userLocation = {
+                    lat: position.coords.latitude,
+                    lng: position.coords.longitude
+                };
+                console.log('User location captured:', userLocation);
+                resolve();
+            },
+            (error) => {
+                console.warn('Geolocation denied or failed:', error.message);
+                // Show inline notice but don't block
+                const notice = document.createElement('div');
+                notice.style.cssText = 'background:#fef3c7;border:1px solid #f59e0b;padding:8px 12px;border-radius:6px;margin:10px 0;font-size:13px;';
+                notice.textContent = '📍 Location access needed for nearby hospitals. You can type your city name instead.';
+                const form = document.querySelector('.intake-form');
+                if (form) form.insertBefore(notice, form.firstChild);
+                resolve();
+            },
+            { timeout: 5000, enableHighAccuracy: false }
+        );
+    });
 }
 
 // ═══════════════════════════════════════════
@@ -201,6 +244,7 @@ function renderStep2(data) {
     const doctors = data.doctors || [];
     doctors.forEach(doc => {
         const stars = '★'.repeat(Math.round(doc.rating)) + '☆'.repeat(5 - Math.round(doc.rating));
+        
         const slotsHtml = (doc.slots || []).slice(0,3).map(s => `
             <button class="slot-btn" 
                 data-doctor-id="${doc.id}"
@@ -498,16 +542,24 @@ async function loadSampleCase(caseId) {
 }
 
 // ═══════════════════════════════════════════
-// VOICE INTAKE
+// VOICE INTAKE - WEB SPEECH API
 // ═══════════════════════════════════════════
-let audioContext = null;
-let processor    = null;
-let inputSource  = null;
+let recognition = null;
 let isRecording  = false;
 
 function initVoiceIntake() {
     const micBtn = $('mic-btn');
     if (!micBtn) return;
+
+    // Check for Web Speech API support
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    
+    if (!SpeechRecognition) {
+        micBtn.title = 'Speech recognition not supported in this browser';
+        micBtn.addEventListener('click', () =>
+            alert('Speech recognition is not supported in your browser. Please use Chrome, Edge, or Safari.'));
+        return;
+    }
 
     if (!window.isSecureContext) {
         micBtn.title = 'Microphone requires HTTPS or localhost';
@@ -516,128 +568,174 @@ function initVoiceIntake() {
         return;
     }
 
+    // Initialize recognition
+    recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.language = 'en-IN';
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => {
+        isRecording = true;
+        setRecordingUI(true, 'Listening...');
+    };
+
+    recognition.onresult = (event) => {
+        let interimTranscript = '';
+        let finalTranscript = '';
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+            const transcript = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+                finalTranscript += transcript + ' ';
+            } else {
+                interimTranscript += transcript;
+            }
+        }
+
+        // Show interim results as live caption
+        if (interimTranscript) {
+            const text = $('rec-status-text');
+            if (text) text.textContent = interimTranscript;
+        }
+
+        // Process final transcript
+        if (finalTranscript) {
+            handleTranscript(finalTranscript.trim());
+        }
+    };
+
+    recognition.onerror = (event) => {
+        console.error('Speech recognition error:', event.error);
+        isRecording = false;
+        setRecordingUI(false);
+
+        let message = 'Speech recognition error: ';
+        switch (event.error) {
+            case 'not-allowed':
+            case 'permission-denied':
+                message = 'Microphone access denied. Click the lock icon in your browser URL bar and allow microphone access.';
+                break;
+            case 'no-speech':
+                message = 'No speech detected. Please try again.';
+                break;
+            case 'network':
+                message = 'Network error. Please check your connection.';
+                break;
+            case 'aborted':
+                return; // User stopped, don't show error
+            default:
+                message += event.error;
+        }
+        alert(message);
+    };
+
+    recognition.onend = () => {
+        isRecording = false;
+        setRecordingUI(false);
+    };
+
     micBtn.addEventListener('click', toggleRecording);
 }
 
 async function toggleRecording() {
-    isRecording ? stopRecording() : await startRecording();
-}
-
-async function startRecording() {
-    try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const hasMic  = devices.some(d => d.kind === 'audioinput');
-        if (!hasMic) throw new Error('No microphone detected on this system.');
-
-        const stream  = await navigator.mediaDevices.getUserMedia({ audio: true });
-        audioContext  = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-        inputSource   = audioContext.createMediaStreamSource(stream);
-        processor     = audioContext.createScriptProcessor(4096, 1, 1);
-
-        const leftChannel = [];
-        processor.onaudioprocess = e => leftChannel.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-        inputSource.connect(processor);
-        processor.connect(audioContext.destination);
-
-        isRecording = true;
-        setRecordingUI(true);
-
-        window._stopRec = async () => {
-            processor.disconnect();
-            inputSource.disconnect();
-            stream.getTracks().forEach(t => t.stop());
-            await sendAudioToBackend(exportWAV(leftChannel, 16000));
-        };
-    } catch (err) {
-        const msg = err.name === 'NotAllowedError'
-            ? 'Microphone access denied. Click the lock icon in your browser URL bar and allow microphone access.'
-            : 'Could not access microphone: ' + err.message;
-        alert(msg);
+    if (isRecording) {
+        recognition.stop();
+    } else {
+        try {
+            recognition.start();
+        } catch (err) {
+            console.error('Failed to start recognition:', err);
+            alert('Failed to start speech recognition. Please try again.');
+        }
     }
 }
 
-function stopRecording() {
-    if (window._stopRec) { window._stopRec(); window._stopRec = null; }
-    isRecording = false;
-    setRecordingUI(false);
-}
-
-function setRecordingUI(active) {
+function setRecordingUI(active, statusText = '') {
     const btn    = $('mic-btn');
     const status = $('recording-status');
     const text   = $('rec-status-text');
+    
     if (active) {
         btn?.classList.add('recording');
         if (status) status.style.display = 'flex';
-        if (text)   text.textContent = 'Listening...';
+        if (text && statusText) text.textContent = statusText;
     } else {
         btn?.classList.remove('recording');
         if (status) status.style.display = 'none';
     }
 }
 
-async function sendAudioToBackend(blob) {
-    const status = $('recording-status');
-    const text   = $('rec-status-text');
-    if (status) { status.style.display = 'flex'; }
-    if (text)   text.textContent = 'Transcribing...';
+async function handleTranscript(transcript) {
+    if (!transcript) return;
 
-    const formData = new FormData();
-    formData.append('audio', blob, 'recording.wav');
+    setRecordingUI(true, 'Extracting information...');
 
     try {
-        const res  = await fetch('/api/transcribe', { method: 'POST', body: formData });
+        const res = await fetch('/api/extract-intake', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ transcript })
+        });
         const data = await res.json();
-        if (data.text) {
-            const area = $('conversational_query');
-            if (area) {
-                area.value = (area.value ? area.value + ' ' : '') + data.text;
-            }
-        } else if (data.error) {
-            alert('Transcription failed: ' + (data.messages || []).join(' '));
+
+        if (data.error) {
+            alert('Extraction failed: ' + (data.messages || []).join(' '));
+            return;
         }
+
+        const extracted = data.extracted || {};
+        
+        // Auto-populate form fields where values exist
+        const fieldMap = {
+            'patient_name': extracted.name,
+            'age_group': extracted.age,
+            'chief_complaint': extracted.chief_complaint,
+            'symptoms_description': extracted.symptoms_description,
+            'procedure': extracted.procedure_type,
+            'current_medications': Array.isArray(extracted.current_medications) 
+                ? extracted.current_medications.join(', ') 
+                : extracted.current_medications,
+            'allergies': Array.isArray(extracted.allergies) 
+                ? extracted.allergies.join(', ') 
+                : extracted.allergies,
+            'prior_conditions': Array.isArray(extracted.prior_conditions) 
+                ? extracted.prior_conditions.join(', ') 
+                : extracted.prior_conditions
+        };
+
+        // Populate fields and highlight missing ones
+        Object.keys(fieldMap).forEach(fieldId => {
+            const el = $(fieldId);
+            if (!el) return;
+
+            const value = fieldMap[fieldId];
+            if (value && value !== null && value !== '') {
+                el.value = value;
+                el.style.border = '2px solid #10b981'; // Green border for filled
+                setTimeout(() => el.style.border = '', 2000);
+            } else {
+                el.style.border = '2px solid #fbbf24'; // Yellow border for missing
+            }
+        });
+
+        // Also store raw transcript in conversational_query
+        const convQuery = $('conversational_query');
+        if (convQuery) {
+            convQuery.value = transcript;
+        }
+
+        // Show message about highlighted fields
+        const missingCount = Object.values(fieldMap).filter(v => !v || v === '').length;
+        if (missingCount > 0) {
+            alert(`Information extracted! Please fill in the ${missingCount} highlighted field(s).`);
+        }
+
     } catch (err) {
-        console.error('Transcription network error:', err);
+        console.error('Extraction network error:', err);
+        alert('Failed to extract information. Please try again.');
     } finally {
-        if (status) status.style.display = 'none';
+        setRecordingUI(false);
     }
 }
 
-// WAV ENCODER
-function exportWAV(chunks, sampleRate) {
-    const buffer   = flatten(chunks);
-    const dataview = new DataView(new ArrayBuffer(44 + buffer.length * 2));
-    writeString(dataview, 0, 'RIFF');
-    dataview.setUint32(4, 36 + buffer.length * 2, true);
-    writeString(dataview, 8, 'WAVE');
-    writeString(dataview, 12, 'fmt ');
-    dataview.setUint32(16, 16, true);
-    dataview.setUint16(20, 1, true);
-    dataview.setUint16(22, 1, true);
-    dataview.setUint32(24, sampleRate, true);
-    dataview.setUint32(28, sampleRate * 2, true);
-    dataview.setUint16(32, 2, true);
-    dataview.setUint16(34, 16, true);
-    writeString(dataview, 36, 'data');
-    dataview.setUint32(40, buffer.length * 2, true);
-    let offset = 44;
-    for (let i = 0; i < buffer.length; i++, offset += 2) {
-        const s = Math.max(-1, Math.min(1, buffer[i]));
-        dataview.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-    }
-    return new Blob([dataview], { type: 'audio/wav' });
-}
-
-function flatten(chunks) {
-    let length = 0;
-    chunks.forEach(c => length += c.length);
-    const result = new Float32Array(length);
-    let offset = 0;
-    chunks.forEach(c => { result.set(c, offset); offset += c.length; });
-    return result;
-}
-
-function writeString(view, offset, string) {
-    for (let i = 0; i < string.length; i++)
-        view.setUint8(offset + i, string.charCodeAt(i));
-}
