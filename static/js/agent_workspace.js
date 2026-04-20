@@ -237,11 +237,81 @@ function renderStep2(data) {
             <span class="triage-spec">${specialty}</span>
         </div>`;
 
-    // Doctor cards
+    // Render Options
+    const optionsContainer = $('analysis-options-container');
+    if (optionsContainer) {
+        const options = triage.options || [];
+        optionsContainer.innerHTML = `<div class="section-heading">Recommended Care Path Options</div>
+            <div style="display:flex; gap:16px; margin-bottom: 20px;">
+                ${options.map(opt => `
+                    <div class="doctor-card option-card" style="flex:1;" onclick="handleOptionSelect('${opt.id}', '${specialty}')">
+                        <div style="font-size:14px; font-weight:600; margin-bottom:6px;">${opt.title}</div>
+                        <div style="font-size:12px; color:var(--text-muted);">${opt.desc}</div>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    }
+
+    const grid = $('doctors-grid');
+    if (grid) {
+        grid.style.display = 'none';
+    }
+
+    // Save preloaded doctors if any
+    window.preloadedDoctors = data.doctors || [];
+
+    selectedDoctor = null;
+    selectedSlot   = null;
+    $('confirm-selection-btn').disabled = true;
+}
+
+window.handleOptionSelect = async function(optionId, specialty) {
+    document.querySelectorAll('.option-card').forEach(c => c.classList.remove('selected'));
+    if (event && event.currentTarget) {
+        event.currentTarget.classList.add('selected');
+    }
+    
+    const grid = $('doctors-grid');
+    grid.style.display = 'grid';
+    
+    if (optionId === 'medication') {
+        grid.innerHTML = `<div class="section-heading">Based on your selection, a prescription will be sent to your pharmacy. No appointment is needed at this time.</div>`;
+        $('confirm-selection-btn').disabled = true;
+        return;
+    }
+    
+    grid.innerHTML = `<div class="section-heading">Finding Specialists... <div class="spinner-sm" style="display:inline-block; margin-left:10px; border-top-color: var(--accent);"></div></div>`;
+    
+    try {
+        const res = await fetch('/api/hospital-lookup', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                procedure: specialty,
+                location: userLocation ? {lat: userLocation.lat, lng: userLocation.lng} : null
+            })
+        });
+        const data = await res.json();
+        if (data.doctors && data.doctors.length > 0) {
+            renderDoctorsGrid(data.doctors);
+        } else if (window.preloadedDoctors && window.preloadedDoctors.length > 0) {
+            renderDoctorsGrid(window.preloadedDoctors);
+        } else {
+            grid.innerHTML = `<div class="section-heading">No specialists found nearby. Please contact the clinic directly.</div>`;
+        }
+    } catch (e) {
+        if (window.preloadedDoctors && window.preloadedDoctors.length > 0) {
+            renderDoctorsGrid(window.preloadedDoctors);
+        } else {
+            grid.innerHTML = `<div class="section-heading">Error finding hospitals.</div>`;
+        }
+    }
+};
+
+function renderDoctorsGrid(doctors) {
     const grid = $('doctors-grid');
     grid.innerHTML = `<div class="section-heading">Recommended Specialists & Available Slots</div>`;
 
-    const doctors = data.doctors || [];
     doctors.forEach(doc => {
         const stars = '★'.repeat(Math.round(doc.rating)) + '☆'.repeat(5 - Math.round(doc.rating));
         
@@ -280,10 +350,6 @@ function renderStep2(data) {
             </div>`;
         grid.appendChild(card);
     });
-
-    selectedDoctor = null;
-    selectedSlot   = null;
-    $('confirm-selection-btn').disabled = true;
 }
 
 window.selectSlot = function(btn, doctor) {

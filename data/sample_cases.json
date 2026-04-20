@@ -1,10 +1,11 @@
 [
   {
     "id": 0,
-    "name": "Chest Pain Case",
+    "case_title": "Chest Pain",
+    "name": "David Henderson",
     "chief_complaint": "chest feels heavy and tight",
     "symptoms_description": "Started yesterday, feels like pressure, worse with activity",
-    "age_group": "55-65",
+    "age_group": "50-60",
     "current_medications": ["lisinopril", "atorvastatin"],
     "allergies": ["penicillin"],
     "prior_conditions": ["hypertension", "high cholesterol"],
@@ -25,7 +26,8 @@
   },
   {
     "id": 1,
-    "name": "Pre-Op Surgery Case",
+    "case_title": "Surgery",
+    "name": "Maria Rodriguez",
     "chief_complaint": "scheduled for gallbladder surgery",
     "symptoms_description": "recurring abdominal pain, diagnosed with gallstones",
     "age_group": "40-50",
@@ -49,7 +51,8 @@
   },
   {
     "id": 2,
-    "name": "Colonoscopy Screening",
+    "case_title": "Colonoscopy",
+    "name": "Robert Miller",
     "chief_complaint": "routine colonoscopy screening",
     "symptoms_description": "no symptoms, preventive screening",
     "age_group": "50-60",
@@ -72,7 +75,8 @@
   },
   {
     "id": 3,
-    "name": "Dizzy Spells",
+    "case_title": "Dizziness",
+    "name": "Elizabeth Thompson",
     "chief_complaint": "feeling dizzy and lightheaded",
     "symptoms_description": "started 3 days ago, happens when standing up, no spinning sensation",
     "age_group": "70-80",
@@ -96,7 +100,8 @@
   },
   {
     "id": 4,
-    "name": "MRI with Contrast",
+    "case_title": "MRI Scan",
+    "name": "Sarah Jenkins",
     "chief_complaint": "scheduled for brain MRI",
     "symptoms_description": "persistent headaches, neurologist ordered MRI",
     "age_group": "30-40",

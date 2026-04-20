@@ -118,19 +118,53 @@ class HospitalLookupService:
                 return self._mock_search_hospitals(specialty or "", (lat, lng))
             
             hospitals = []
+            seen_places = set()
             
-            for feature in features[:10]:  # Limit to top 10
+            for feature in features:
                 props = feature.get("properties", {})
+                
+                name = props.get("name", props.get("address_line1", "Unknown Hospital"))
+                if not name or name == "Unknown Hospital":
+                    continue
+                    
+                # More aggressive deduplication by normalizing name
+                # Remove common words that vary in API results
+                def normalize(s):
+                    import re
+                    s = s.lower().strip()
+                    # Remove punctuation (including dots in initials)
+                    s = re.sub(r'[^\w\s]', '', s)
+                    # Remove common medical terms
+                    s = re.sub(r'\b(hospital|clinic|medical|center|centre|institute|of|and|pvt|ltd|multispeciality|specialty|healthcare|care|unit|foundation|trust)\b', '', s)
+                    # Remove extra spaces and dots
+                    s = ''.join(s.split())
+                    return s
+                
+                norm_name = normalize(name)
+                display_city = props.get("city", props.get("suburb", ""))
+                city_key = display_city.lower().strip()
+                dedup_key = f"{norm_name}_{city_key}"
+                
+                if dedup_key in seen_places:
+                    logger.info(f"[GEOAPIFY API] Skipping duplicate hospital: {name} (key: {dedup_key})")
+                    continue
+                seen_places.add(dedup_key)
+                
+                # Limit hospitals to 6 instead of 10 to reduce repetitive UI cards
+                if len(hospitals) >= 6:
+                    break
+                    
                 coords = feature.get("geometry", {}).get("coordinates", [lng, lat])
                 
                 # Extract hospital data from Geoapify response
                 hospital_lat = coords[1] if len(coords) > 1 else lat
                 hospital_lng = coords[0] if len(coords) > 0 else lng
+                address = props.get("formatted", props.get("address_line2", ""))
                 
                 hospital = {
                     "id": props.get("place_id", f"geo_{len(hospitals)}"),
-                    "name": props.get("name", props.get("address_line1", "Unknown Hospital")),
-                    "address": props.get("formatted", props.get("address_line2", "")),
+                    "name": name,
+                    "address": address,
                     "rating": 0.0,  # Geoapify doesn't provide ratings, use default
                     "total_reviews": 0,
                     "phone": props.get("contact", {}).get("phone", ""),
@@ -138,7 +172,7 @@ class HospitalLookupService:
                     "latitude": hospital_lat,
                     "longitude": hospital_lng,
                     "open_now": None,  # Can be derived from opening_hours if available
-                    "location": props.get("city", props.get("suburb", "")),
+                    "location": display_city,
                     "distance_km": self.haversine_distance(
                         (lat, lng),
                         (hospital_lat, hospital_lng)
@@ -171,48 +205,61 @@ class HospitalLookupService:
         except Exception as e:
             logger.error(f"[GEOAPIFY API] Unexpected error: {e}, falling back to mock data")
             return self._mock_search_hospitals(specialty or "", (lat, lng))
-    
     def _generate_mock_doctors_for_hospital(
         self,
         hospital_name: str,
         specialty: str
     ) -> List[Dict[str, Any]]:
         """Generate mock doctors for a real hospital."""
-        from datetime import datetime, timedelta
-        
-        # Generate 1-2 mock doctors per hospital
+        # Generate 1-2 mock doctors per hospital, randomized by hospital name
         doctors = []
-        base_date = datetime.now() + timedelta(days=1)
+        import hashlib
+        # Use name hash to pick different doctors for different hospitals
+        h_hash = int(hashlib.md5(hospital_name.encode()).hexdigest(), 16)
         
-        doctor_names = [
+        doctor_pool = [
             ("Dr. Rajesh Kumar", "RK"),
             ("Dr. Priya Sharma", "PS"),
-            ("Dr. Amit Patel", "AP")
+            ("Dr. Amit Patel", "AP"),
+            ("Dr. Sneha Gupta", "SG"),
+            ("Dr. Vikram Singh", "VS"),
+            ("Dr. Ananya Reddy", "AR"),
+            ("Dr. Rohan Mehta", "RM"),
+            ("Dr. Kavita Desai", "KD")
         ]
         
-        for i, (name, initial) in enumerate(doctor_names[:2]):
+        # Pick 2 doctors from the pool based on hash
+        pool_indices = [(h_hash + 0) % len(doctor_pool), (h_hash + 1) % len(doctor_pool)]
+        
+        # Current date for slots
+        from datetime import datetime, timedelta
+        base_date = datetime.now() + timedelta(days=2) # Start slots in 2 days
+        
+        for idx in pool_indices:
+            name, initial = doctor_pool[idx]
             slots = []
-            for day in range(2):
-                for hour in [9, 14]:
-                    slot_time = base_date + timedelta(days=day, hours=hour)
-                    slots.append({
-                        "slot_id": f"slot_{i}_{day}_{hour}",
-                        "datetime_display": slot_time.strftime("%b %d, %Y at %I:%M %p"),
-                        "datetime_iso": slot_time.isoformat(),
-                        "duration": "30 min",
-                        "location": hospital_name,
-                        "available": True
-                    })
+            # Vary hours based on doctor index
+            start_hour = 9 + (idx % 3)
+            for day in range(3):
+                slot_time = base_date + timedelta(days=day, hours=start_hour)
+                slots.append({
+                    "slot_id": f"slot_{idx}_{day}_{hospital_name[:5]}",
+                    "datetime_display": slot_time.strftime("%b %d, %Y at %I:%M %p"),
+                    "datetime_iso": slot_time.isoformat(),
+                    "duration": "30 min",
+                    "location": hospital_name,
+                    "available": True
+                })
             
             doctors.append({
-                "id": f"dr_{i}_{hospital_name[:10]}",
+                "id": f"dr_{idx}_{hospital_name[:8].replace(' ', '_')}",
                 "name": name,
-                "specialty": specialty.capitalize() if specialty else "General Physician",
-                "rating": round(4.5 + (i * 0.2), 1),
-                "experience": f"{10 + i * 2} years",
+                "specialty": specialty.capitalize() if specialty else "Specialist",
+                "rating": round(4.2 + ((h_hash + idx) % 8) / 10.0, 1),
+                "experience": f"{8 + ((h_hash + idx) % 15)} years",
                 "hospital": hospital_name,
                 "hospital_location": hospital_name,
-                "hospital_rating": 4.5,
+                "hospital_rating": round(4.0 + (h_hash % 10) / 10.0, 1),
                 "image_initial": initial,
                 "slots": slots
             })

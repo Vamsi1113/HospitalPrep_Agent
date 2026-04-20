@@ -2006,14 +2006,20 @@ def conversation_intake_node_tool(state: AgentState, llm_client=None, **kwargs) 
         if llm_client and llm_client.is_available():
             extraction_prompt = f"""Extract the following information from the patient's message:
 - Patient name (if mentioned)
+- Age and Gender (if mentioned)
 - Chief complaint or reason for visit
 - Symptoms description
+- Duration and Severity
+- Associated complaints
 - Appointment type (Consultation, Surgery, Imaging, Lab Work, Procedure)
 - Procedure name (if mentioned)
+- Current medications, Allergies, Prior conditions
+- Location/Preferences (if mentioned)
+- Preferred timing (if mentioned)
 
 Patient message: {transcript}
 
-Return the extracted information in a structured format."""
+Return the extracted information in a structured JSON format ONLY. Do not include markdown."""
             
             extracted = llm_client.generate_with_prompt(
                 "You are a medical intake assistant extracting structured information.",
@@ -2158,23 +2164,39 @@ def clarification_agent_node_tool(state: AgentState, **kwargs) -> AgentState:
         # Generate follow-up questions
         questions = []
         
-        for field in missing_fields:
-            if field == "chief_complaint":
-                questions.append("What is the main reason for your visit?")
-            elif field == "appointment_type":
-                questions.append("What type of appointment do you need?")
-                if "appointment_type" in suggested_options:
-                    questions.append(f"Options: {', '.join(suggested_options['appointment_type'])}")
-            elif field == "symptoms_description":
-                questions.append("Can you describe your symptoms in more detail?")
-            elif field == "age_group":
-                questions.append("What is your age group?")
-                if "age_group" in suggested_options:
-                    questions.append(f"Options: {', '.join(suggested_options['age_group'])}")
-            elif field == "current_medications":
-                questions.append("Are you currently taking any medications?")
-            elif field == "allergies":
-                questions.append("Do you have any allergies?")
+        # Priority order for missing fields to ask about
+        priority_fields = ["patient_name", "chief_complaint", "appointment_type", "procedure", "symptoms_description", "age_group", "allergies", "current_medications"]
+        
+        questions_asked = 0
+        for field in priority_fields:
+            if field in missing_fields:
+                if field == "chief_complaint":
+                    questions.append("What is the main reason for your visit?")
+                elif field == "appointment_type":
+                    questions.append("What type of appointment do you need?")
+                    if "appointment_type" in suggested_options:
+                        questions.append(f"Options: {', '.join(suggested_options['appointment_type'])}")
+                elif field == "symptoms_description":
+                    questions.append("Can you describe your symptoms in more detail?")
+                elif field == "age_group":
+                    questions.append("What is your age group?")
+                    if "age_group" in suggested_options:
+                        questions.append(f"Options: {', '.join(suggested_options['age_group'])}")
+                elif field == "current_medications":
+                    questions.append("Are you currently taking any medications?")
+                elif field == "allergies":
+                    questions.append("Do you have any allergies?")
+                elif field == "procedure":
+                    questions.append("What kind of procedure or appointment do you need?")
+                    if "procedure" in suggested_options:
+                        questions.append(f"Options: {', '.join(suggested_options['procedure'])}")
+                elif field == "patient_name":
+                    questions.append("Could you please provide your full name for the booking?")
+                
+                questions_asked += 1
+                # Only ask about 2 missing items at a time to avoid overwhelming the patient
+                if questions_asked >= 2:
+                    break
         
         # Combine questions
         clarification_message = "\n\n".join(questions)
@@ -2325,10 +2347,12 @@ def extract_intake_from_transcript(transcript: str, llm_client) -> dict:
         }
     
     system_prompt = (
-        "You are a medical intake assistant. Extract patient information from the transcript. "
+        "You are a medical intake assistant. Extract detailed patient information from the transcript. "
         "Return ONLY valid JSON with these keys: name, age, gender, chief_complaint, "
-        "symptoms_description, duration, procedure_type, current_medications, allergies, "
-        "prior_conditions. Use null for missing fields. No explanation, no markdown, only JSON."
+        "symptoms_description, duration, severity, associated_complaints, procedure_type, "
+        "current_medications, allergies, prior_conditions, location, preferred_timing. "
+        "Use null for missing fields. Ensure entity mapping is clinically accurate (e.g. mapping casual terms to procedure_type). "
+        "No explanation, no markdown, only JSON."
     )
     
     user_prompt = f"Transcript: {transcript}"
@@ -2369,10 +2393,14 @@ def extract_intake_from_transcript(transcript: str, llm_client) -> dict:
             "chief_complaint": extracted.get("chief_complaint") or transcript,
             "symptoms_description": extracted.get("symptoms_description") or transcript,
             "duration": extracted.get("duration"),
+            "severity": extracted.get("severity"),
+            "associated_complaints": extracted.get("associated_complaints") or [],
             "procedure_type": extracted.get("procedure_type"),
             "current_medications": extracted.get("current_medications") or [],
             "allergies": extracted.get("allergies") or [],
-            "prior_conditions": extracted.get("prior_conditions") or []
+            "prior_conditions": extracted.get("prior_conditions") or [],
+            "location": extracted.get("location"),
+            "preferred_timing": extracted.get("preferred_timing")
         }
         
         logger.info(f"Successfully extracted intake fields from transcript")

@@ -779,13 +779,20 @@ def hospital_lookup():
             }), 400
         
         # Search for hospitals
-        hospitals = hospital_lookup_service.search_hospitals(procedure)
+        location = data.get("location", None)
+        hospitals = hospital_lookup_service.search_hospitals(procedure, location=location)
         
         app.logger.info(f"Found {len(hospitals)} hospitals for procedure: {procedure}")
         
+        all_doctors = []
+        for hospital in hospitals:
+            doctors = hospital.get("doctors", [])
+            all_doctors.extend(doctors)
+        
         return jsonify({
             "error": False,
-            "hospitals": hospitals
+            "hospitals": hospitals,
+            "doctors": all_doctors
         }), 200
     
     except Exception as e:
@@ -904,19 +911,70 @@ def analyze_intake():
             red_flags = triage_data.get("red_flags", [])
             all_doctors = hospital_data.get("doctors", [])
         
-        # Determine urgency from symptoms (simple heuristic)
+        # Care-Path Analysis using LLM
+        care_path_prompt = f"""
+        Analyze the following patient intake details and determine the care path.
+        Patient Complaint: {chief_complaint}
+        Procedure: {procedure}
+        Location: {location}
+        
+        Provide the response in the following JSON format ONLY:
+        {{
+            "urgency": "routine", // or "urgent" or "emergency"
+            "red_flags": ["list of red flags if any"],
+            "care_path": "short patient-facing summary of the care path",
+            "doctor_type": "type of doctor needed",
+            "options": [
+                {{"id": "medication", "title": "Medication & Rest", "desc": "Manage symptoms with prescribed medication"}},
+                {{"id": "consultation", "title": "Consult a Specialist", "desc": "Visit a doctor for a thorough evaluation"}},
+                {{"id": "surgery", "title": "Urgent Procedure/Surgery", "desc": "Immediate surgical intervention may be required"}}
+            ]
+        }}
+        """
+        
         urgency = "routine"
         red_flags = []
+        care_path_summary = "General consultation and evaluation."
+        doctor_type = specialty
+        options = [
+            {"id": "medication", "title": "Medication & Rest", "desc": "Manage symptoms with prescribed medication"},
+            {"id": "consultation", "title": "Consult a Specialist", "desc": "Visit a doctor for a thorough evaluation"},
+            {"id": "surgery", "title": "Urgent Procedure/Surgery", "desc": "Immediate surgical intervention may be required"}
+        ]
         
-        if "chest" in chief_complaint and "pain" in chief_complaint:
-            urgency = "urgent"
-            red_flags.append("Chest pain - requires urgent evaluation")
-        elif "breath" in chief_complaint or "breathing" in chief_complaint:
-            urgency = "urgent"
-            red_flags.append("Difficulty breathing")
-        elif "severe" in chief_complaint and "pain" in chief_complaint:
-            urgency = "urgent"
-            red_flags.append("Severe pain")
+        try:
+            if llm_client and llm_client.is_available():
+                response = llm_client.generate_with_prompt(
+                    "You are a medical triage assistant determining care paths. Output ONLY valid JSON, no markdown formatting.",
+                    care_path_prompt
+                )
+                if response:
+                    import json
+                    import re
+                    # Strip markdown block if present
+                    json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response, re.DOTALL)
+                    json_str = json_match.group(1) if json_match else response
+                    
+                    analysis = json.loads(json_str)
+                    urgency = analysis.get("urgency", "routine")
+                    red_flags = analysis.get("red_flags", [])
+                    care_path_summary = analysis.get("care_path", care_path_summary)
+                    doctor_type = analysis.get("doctor_type", specialty)
+                    specialty = doctor_type # Update specialty with LLM suggestion
+                    if "options" in analysis:
+                        options = analysis["options"]
+        except Exception as e:
+            app.logger.warning(f"Care-path LLM analysis failed: {e}")
+            # Fallback to heuristics
+            if "chest" in chief_complaint and "pain" in chief_complaint:
+                urgency = "urgent"
+                red_flags.append("Chest pain - requires urgent evaluation")
+            elif "breath" in chief_complaint or "breathing" in chief_complaint:
+                urgency = "urgent"
+                red_flags.append("Difficulty breathing")
+            elif "severe" in chief_complaint and "pain" in chief_complaint:
+                urgency = "urgent"
+                red_flags.append("Severe pain")
         
         app.logger.info(f"Analysis complete: urgency={urgency}, specialty={specialty}, doctors={len(all_doctors)}")
         
@@ -925,7 +983,9 @@ def analyze_intake():
             "triage": {
                 "urgency": urgency,
                 "specialty": specialty,
-                "red_flags": red_flags
+                "red_flags": red_flags,
+                "care_path": care_path_summary,
+                "options": options
             },
             "doctors": all_doctors
         }), 200
