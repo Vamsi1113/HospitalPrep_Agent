@@ -17,18 +17,18 @@ logger = logging.getLogger(__name__)
 class EmailService:
     
     def __init__(self):
-        # Gmail API configuration
-        self.gmail_sender = os.getenv("GMAIL_SENDER_ADDRESS", "")
-        self.gmail_creds_path = os.getenv("GMAIL_OAUTH_CREDENTIALS_JSON", "")
-        
         # SendGrid configuration
         self.sendgrid_api_key = os.getenv("SENDGRID_API_KEY", "")
         self.sendgrid_from_email = os.getenv("SENDGRID_FROM_EMAIL", "noreply@clinic.example.com")
         
-        # Determine which service to use
-        self.use_gmail = bool(self.gmail_sender and self.gmail_creds_path)
-        self.use_sendgrid = bool(self.sendgrid_api_key) and not self.use_gmail
-        self.use_real_email = self.use_gmail or self.use_sendgrid
+        # Gmail API configuration
+        self.gmail_sender = os.getenv("GMAIL_SENDER_ADDRESS", "")
+        self.gmail_creds_path = os.getenv("GMAIL_OAUTH_CREDENTIALS_JSON", "")
+        
+        # Determine which service to use (SendGrid takes priority if configured)
+        self.use_sendgrid = bool(self.sendgrid_api_key)
+        self.use_gmail = bool(self.gmail_sender and self.gmail_creds_path) and not self.use_sendgrid
+        self.use_real_email = self.use_sendgrid or self.use_gmail
         
         self._gmail_service = None
         self._sendgrid_client = None

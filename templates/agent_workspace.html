@@ -112,12 +112,12 @@
     .fld { display: flex; flex-direction: column; gap: 5px; }
     .fld label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
     .fld input, .fld select, .fld textarea {
-        background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px;
+        background: #FFFFFF; border: 1px solid var(--border); border-radius: 8px;
         padding: 9px 12px; color: var(--text-primary); font-size: 13px;
         font-family: 'Inter', sans-serif; outline: none; transition: border-color 0.2s;
     }
     .fld input:focus, .fld select:focus, .fld textarea:focus { border-color: var(--accent); }
-    .fld select option { background: #1e1b2e; }
+    .fld select option { background: #FFFFFF; color: #000000; }
     .section-label { font-size: 11px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.08em; margin: 18px 0 10px; grid-column: 1/-1; }
 
     .quick-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
@@ -412,9 +412,17 @@
                     <form id="intake-form" autocomplete="off">
                         <div class="fields-grid">
                             <div class="section-label">Patient Info</div>
-                            <div class="fld full">
+                            <div class="fld">
                                 <label>Patient Name</label>
                                 <input type="text" id="patient_name" placeholder="e.g. John Smith">
+                            </div>
+                            <div class="fld">
+                                <label>Email Address</label>
+                                <input type="email" id="patient_email" placeholder="john@example.com">
+                            </div>
+                            <div class="fld">
+                                <label>Phone Number</label>
+                                <input type="tel" id="patient_phone" placeholder="+91 98765 43210">
                             </div>
                             <div class="fld">
                                 <label>Age Group</label>

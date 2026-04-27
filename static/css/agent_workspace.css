@@ -491,7 +491,7 @@ ul, ol { list-style: none; }
 .field-select,
 .field-textarea {
     width: 100%;
-    background: var(--bg-page);
+    background: #FFFFFF;
     border: 1px solid var(--border);
     border-radius: var(--r-md);
     color: var(--text-primary);
@@ -510,8 +510,8 @@ ul, ol { list-style: none; }
 }
 
 .field-select option {
-    background: var(--bg-elevated);
-    color: var(--text-primary);
+    background: #FFFFFF;
+    color: #000000;
 }
 
 .field-textarea {

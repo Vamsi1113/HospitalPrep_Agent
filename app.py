@@ -779,7 +779,14 @@ def hospital_lookup():
             }), 400
         
         # Search for hospitals
-        location = data.get("location", None)
+        loc_data = data.get("location", None)
+        location = None
+        if isinstance(loc_data, dict):
+            lat = loc_data.get("lat")
+            lng = loc_data.get("lng")
+            if lat is not None and lng is not None:
+                location = (float(lat), float(lng))
+        
         hospitals = hospital_lookup_service.search_hospitals(procedure, location=location)
         
         app.logger.info(f"Found {len(hospitals)} hospitals for procedure: {procedure}")
@@ -801,6 +808,65 @@ def hospital_lookup():
             "error": True,
             "messages": ["Failed to search hospitals. Please try again."]
         }), 500
+
+
+@app.route('/api/generate-medication', methods=['POST'])
+def generate_medication():
+    """
+    Generate medication recommendations based on symptoms.
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": True, "messages": ["No data provided"]}), 400
+        
+        chief_complaint = data.get("chief_complaint", "")
+        symptoms = data.get("symptoms_description", "")
+        medications = data.get("current_medications", [])
+        allergies = data.get("allergies", [])
+        
+        prompt = f"""
+        Analyze the following patient details and recommend over-the-counter medications and lifestyle advice for symptom management.
+        Chief Complaint: {chief_complaint}
+        Symptoms: {symptoms}
+        Current Medications: {', '.join(medications) if medications else 'None'}
+        Allergies: {', '.join(allergies) if allergies else 'None'}
+        
+        Provide the response in the following JSON format ONLY:
+        {{
+            "medications": [
+                {{"name": "Medication Name", "dosage": "Recommended dosage", "reason": "Why this is recommended"}}
+            ],
+            "advice": ["Lifestyle advice 1", "Lifestyle advice 2"],
+            "warnings": ["Warning 1", "Warning 2"]
+        }}
+        """
+        
+        if llm_client and llm_client.is_available():
+            response = llm_client.generate_with_prompt(
+                "You are a medical assistant providing conservative symptom management advice. Output ONLY valid JSON.",
+                prompt
+            )
+            if response:
+                import json
+                import re
+                json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response, re.DOTALL)
+                json_str = json_match.group(1) if json_match else response
+                return jsonify({"error": False, "data": json.loads(json_str)}), 200
+        
+        # Fallback
+        return jsonify({
+            "error": False,
+            "data": {
+                "medications": [{"name": "Rest & Hydration", "dosage": "As needed", "reason": "General recovery"}],
+                "advice": ["Rest", "Drink plenty of fluids"],
+                "warnings": ["Consult a doctor if symptoms worsen"]
+            }
+        }), 200
+        
+    except Exception as e:
+        app.logger.error(f"Medication generation error: {e}")
+        return jsonify({"error": True, "messages": [str(e)]}), 500
 
 
 @app.route('/api/analyze', methods=['POST'])
@@ -1109,9 +1175,12 @@ def book_appointment():
                     location=f"{hospital_name}, {hospital_location}",
                     prep_summary=prep_message[:500] + "..." if len(prep_message) > 500 else prep_message
                 )
-                app.logger.info(f"Patient confirmation email sent: {email_result.get('message_id')}")
+                if email_result.get("success"):
+                    app.logger.info(f"Patient confirmation email sent: {email_result.get('message_id')}")
+                else:
+                    app.logger.error(f"Patient email failed: {email_result.get('error')}")
             except Exception as e:
-                app.logger.warning(f"Patient email failed: {e}")
+                app.logger.warning(f"Patient email exception: {e}")
         
         # Send notification email to hospital
         hospital_notify_email = os.getenv("HOSPITAL_NOTIFY_EMAIL", "")

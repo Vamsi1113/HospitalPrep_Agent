@@ -94,6 +94,8 @@ function gatherIntake() {
     const csvList = v => v ? v.split(',').map(s => s.trim()).filter(Boolean) : [];
     return {
         patient_name:         $('patient_name')?.value || '',
+        email:                $('patient_email')?.value || '',
+        phone:                $('patient_phone')?.value || '',
         age_group:            $('age_group')?.value || '',
         chief_complaint:      $('chief_complaint')?.value || '',
         symptoms_description: $('symptoms_description')?.value || '',
@@ -276,8 +278,65 @@ window.handleOptionSelect = async function(optionId, specialty) {
     grid.style.display = 'grid';
     
     if (optionId === 'medication') {
-        grid.innerHTML = `<div class="section-heading">Based on your selection, a prescription will be sent to your pharmacy. No appointment is needed at this time.</div>`;
+        grid.innerHTML = `<div class="section-heading">Generating Medication & Care Recommendations... <div class="spinner-sm" style="display:inline-block; margin-left:10px; border-top-color: var(--accent);"></div></div>`;
         $('confirm-selection-btn').disabled = true;
+        
+        try {
+            const res = await fetch('/api/generate-medication', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(intakeSnapshot)
+            });
+            const result = await res.json();
+            if (result.error) {
+                grid.innerHTML = `<div class="section-heading">Error generating recommendations.</div>`;
+                return;
+            }
+            
+            const data = result.data;
+            let html = `<div class="section-heading">Recommended Medication & Care</div>`;
+            
+            html += `<div style="grid-column: 1/-1; display: flex; flex-direction: column; gap: 16px;">`;
+            
+            // Medications
+            if (data.medications && data.medications.length > 0) {
+                html += `<div class="doctor-card" style="cursor: default;">
+                    <div style="font-size:14px; font-weight:700; color:var(--accent); margin-bottom:12px;">💊 Recommended Medications</div>
+                    ${data.medications.map(m => `
+                        <div style="margin-bottom:10px; padding-bottom:10px; border-bottom:1px solid var(--border-subtle);">
+                            <div style="font-weight:600; font-size:13px;">${m.name}</div>
+                            <div style="font-size:12px; color:var(--text-muted); margin:4px 0;">${m.dosage}</div>
+                            <div style="font-size:11px; background:rgba(124,106,247,0.1); padding:4px 8px; border-radius:4px;">${m.reason}</div>
+                        </div>
+                    `).join('')}
+                </div>`;
+            }
+            
+            // Advice
+            if (data.advice && data.advice.length > 0) {
+                html += `<div class="doctor-card" style="cursor: default;">
+                    <div style="font-size:14px; font-weight:700; color:#34d399; margin-bottom:12px;">🥗 Lifestyle Advice</div>
+                    <ul style="padding-left:20px; margin:0; font-size:12px; color:var(--text-muted);">
+                        ${data.advice.map(a => `<li style="margin-bottom:6px;">${a}</li>`).join('')}
+                    </ul>
+                </div>`;
+            }
+            
+            // Warnings
+            if (data.warnings && data.warnings.length > 0) {
+                html += `<div class="doctor-card" style="cursor: default; border-color:rgba(248,113,113,0.3); background:rgba(248,113,113,0.05);">
+                    <div style="font-size:14px; font-weight:700; color:#f87171; margin-bottom:12px;">⚠️ Important Warnings</div>
+                    <ul style="padding-left:20px; margin:0; font-size:12px; color:var(--text-muted);">
+                        ${data.warnings.map(w => `<li style="margin-bottom:6px;">${w}</li>`).join('')}
+                    </ul>
+                </div>`;
+            }
+            
+            html += `</div>`;
+            grid.innerHTML = html;
+            
+        } catch (e) {
+            grid.innerHTML = `<div class="section-heading">Error generating recommendations.</div>`;
+        }
         return;
     }
     
@@ -564,7 +623,7 @@ function resetWizard() {
     bookingResult   = null;
 
     // Clear form
-    ['patient_name','age_group','chief_complaint','symptoms_description',
+    ['patient_name','patient_email','patient_phone','age_group','chief_complaint','symptoms_description',
      'current_medications','allergies','prior_conditions','appointment_type',
      'procedure','channel_preference','conversational_query'].forEach(id => {
         const el = $(id);
@@ -592,6 +651,8 @@ async function loadSampleCase(caseId) {
 
         const set = (id, val) => { const el = $(id); if (el) el.value = val || ''; };
         set('patient_name',           data.name);
+        set('patient_email',         data.email || '');
+        set('patient_phone',         data.phone || '');
         set('chief_complaint',        data.chief_complaint);
         set('symptoms_description',   data.symptoms_description);
         set('current_medications',    (data.current_medications || []).join(', '));

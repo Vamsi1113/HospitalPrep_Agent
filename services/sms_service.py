@@ -118,10 +118,20 @@ class SMSService:
     def _send_twilio_sms(self, to_phone: str, message: str) -> dict:
         """Send SMS via Twilio API."""
         try:
+            # Twilio requires E.164 format (+1234567890)
+            phone_clean = to_phone.strip().replace(" ", "").replace("-", "")
+            if not phone_clean.startswith("+"):
+                # Default to India (+91) if 10 digits and no prefix, 
+                # or just add + if it looks like a country code is there but no +
+                if len(phone_clean) == 10:
+                    phone_clean = "+91" + phone_clean
+                else:
+                    phone_clean = "+" + phone_clean
+            
             result = self._twilio_client.messages.create(
                 body=message,
                 from_=self.twilio_from_phone,
-                to=to_phone
+                to=phone_clean
             )
             return {
                 "success": True,

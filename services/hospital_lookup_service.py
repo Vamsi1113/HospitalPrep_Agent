@@ -85,12 +85,8 @@ class HospitalLookupService:
             places_url = "https://api.geoapify.com/v2/places"
             
             # Build categories - Geoapify uses specific healthcare categories
-            categories = "healthcare.hospital"
-            if specialty:
-                # Map specialties to additional categories if needed
-                specialty_lower = specialty.lower()
-                if "cardio" in specialty_lower:
-                    categories += ",healthcare.clinic_or_praxis"
+            # Use broader category 'healthcare' to avoid falling back to mock data
+            categories = "healthcare"
             
             # Geoapify expects: circle:longitude,latitude,radius (radius as integer)
             params = {

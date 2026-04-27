@@ -2348,7 +2348,7 @@ def extract_intake_from_transcript(transcript: str, llm_client) -> dict:
     
     system_prompt = (
         "You are a medical intake assistant. Extract detailed patient information from the transcript. "
-        "Return ONLY valid JSON with these keys: name, age, gender, chief_complaint, "
+        "Return ONLY valid JSON with these keys: name, email, phone, age, gender, chief_complaint, "
         "symptoms_description, duration, severity, associated_complaints, procedure_type, "
         "current_medications, allergies, prior_conditions, location, preferred_timing. "
         "Use null for missing fields. Ensure entity mapping is clinically accurate (e.g. mapping casual terms to procedure_type). "
@@ -2388,6 +2388,8 @@ def extract_intake_from_transcript(transcript: str, llm_client) -> dict:
         # Ensure all expected keys exist
         result = {
             "name": extracted.get("name"),
+            "email": extracted.get("email"),
+            "phone": extracted.get("phone"),
             "age": extracted.get("age"),
             "gender": extracted.get("gender"),
             "chief_complaint": extracted.get("chief_complaint") or transcript,
